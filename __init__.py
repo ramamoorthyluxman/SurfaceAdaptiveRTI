@@ -22,7 +22,6 @@ bl_info = {
     "category" : "3D View"
 }
 
-from email.policy import default
 import os
 import bpy
 import numpy as np
@@ -74,7 +73,7 @@ def Polar2Cartesian3D(r, longitude, latitude):
 
     return x, y, z
 
-
+# def generate_homogenous_theta(n):
 
 
 
@@ -125,7 +124,7 @@ class lightSettings(PropertyGroup):
 class surfaceSettings(PropertyGroup):
 
     def update(self, context):
-        mat = context.object.active_material
+        mat = context.scene.objects[context.scene.surface_panel.surface[0]].active_material
         node_tree = mat.node_tree
         nodes = node_tree.nodes
         bsdf = nodes.get("Principled BSDF") 
@@ -178,6 +177,7 @@ class surfaceSettings(PropertyGroup):
     )
 
     surface = []
+    surface_bbox = []
 
 
 class cameraSettings(PropertyGroup):
@@ -185,12 +185,8 @@ class cameraSettings(PropertyGroup):
     def update(self, context):        
         # data = bpy.data.objects['Camera'].data
         data = bpy.data.objects[context.scene.camera_panel.camera[0]].data
-        data.lens = self.focus
-        data.dof.aperture_fstop = self.aperture
-        data.sensor_width = self.sensor_width    
-        image_aspect_ratio = data.sensor_width/ data.sensor_height
-        bpy.context.scene.render.resolution_x = int(abs(math.sqrt(self.resolution * image_aspect_ratio)))
-        bpy.context.scene.render.resolution_y = int(self.resolution/ bpy.context.scene.render.resolution_x)       
+        data.ortho_scale = self.ortho_scale
+        image_aspect_ratio = data.sensor_width/ data.sensor_height        
 
     def update_camera_height(self,context):
         cameras_obj = [cam for cam in bpy.data.objects if cam.type == 'CAMERA']
@@ -204,19 +200,18 @@ class cameraSettings(PropertyGroup):
     camera_height : FloatProperty(
         name="Camera height",
         description="Camera position height",
-        default=0.5,
+        default=1.03,
         min=0,
         max=3.0,        
         update=update_camera_height
     )
     
-    focus : FloatProperty(
-        name="Focal length", 
-        description="Focus distance for non-static camera placement",
-        default=50.0,
+    ortho_scale : FloatProperty(
+        name="Orthographic scale", 
+        description="Orthographic projection scale",
+        default=0.24,
         min=0.000,
-        max=200.00,
-        step=0.5,
+        max=3,        
         update=update
     )
 
@@ -227,30 +222,16 @@ class cameraSettings(PropertyGroup):
         
     )
     
-    aperture : FloatProperty(
-        name="Aperture size (f/#)",
-        description="Aperture size, measured in f-stops",
-        min=1,
-        max=64,
-        step=0.2,
-        update=update
-    )
 
-    resolution : FloatProperty(
+    resolution_factor : FloatProperty(
         name="Resolution",
-        description="Sensor resolution",
-        min=16000,
-        max=100000000,
-        default=25000,
+        description="Resolution scale factor",
+        min=0,
+        max=5,
+        default=1.0,
         update=update
     )
 
-    sensor_width : FloatProperty(
-        name="Sensor width (mm)",
-        description="Sensor width",
-        default=36.0,
-        update = update
-    )
 
     camera = []
     
@@ -290,7 +271,19 @@ class createLights(Operator):
         scene = context.scene
         mytool = scene.light_panel
         mytool.light_list.clear()
-        # bpy.data.worlöds["World"].node_tree.nodes["RGB"].outputs[0].default_value = (0, 0, 0, 1)
+
+        light_obj = [light for light in bpy.data.objects if light.type == 'LIGHT']
+        for light in bpy.data.lights:
+            light.animation_data_clear()
+            bpy.data.lights.remove(light)
+
+        # Deselect any currently selected objects
+        try:
+            bpy.ops.object.select_all(action='DESELECT')
+        except:
+            pass
+
+        
 
         if not os.path.isfile(mytool.lp_file_path) and not mytool.nblp:
             self.report({"ERROR"})
@@ -346,13 +339,15 @@ class createCamera(Operator):
         cameras_obj = [cam for cam in bpy.data.objects if cam.type == 'CAMERA']
         scene.camera_panel.camera.clear()
         if len(cameras_obj) != 0:
-            self.report({'ERROR'}, "Camera already exist in scene.")
-            return {'FINISHED'}
-
+            # self.report({'ERROR'}, "Camera already exist in scene.")
+            # return {'FINISHED'}
+            for cam in bpy.data.cameras:
+                cam.animation_data_clear()
+                bpy.data.cameras.remove(cam)
 
         camera_data = bpy.data.cameras.new("Camera")
-        camera_data.dof.use_dof = True
-        camera_data.lens = scene.camera_panel.focus
+        camera_data.dof.use_dof = False
+        camera_data.type="ORTHO"
         camera_object = bpy.data.objects.new("Camera", camera_data)
         
         # Link camera to current scene
@@ -380,6 +375,7 @@ class importSurface(Operator):
         if scene.surface_panel.mesh_file_path.endswith(".OBJ"):
             bpy.ops.import_scene.obj(filepath=scene.surface_panel.mesh_file_path)
             ob = bpy.context.selected_objects[0]
+            ob.rotation_euler[0] = 0.0523599
             surfacetool.surface.append(ob.name)
             
         return {'FINISHED'} 
@@ -451,105 +447,34 @@ class SetAnimation(Operator):
 
         return {'FINISHED'}
 
-class SetRender(Operator):
-    bl_idname = "rti.set_render"
-    bl_label = "Set render settings"
-
+class acquire(Operator):
+    bl_idname = "rti.acquire"
+    bl_label = "Acquire"    
+    bl_use_preview = True
+    
     def execute(self, context):
-        scene = context.scene
-        
-        # Make sure compositing and nodes are enabled so that we can generate depth and normal images with render passes
-        if not scene.render.use_compositing:
-            scene.render.use_compositing = True
-        if not scene.use_nodes:
-            scene.use_nodes = True
-
-        # Remove all existing nodes to create new ones
-        try:
-            for node in scene.node_tree.nodes:
-                scene.node_tree.nodes.remove(node)
-        except:
-            pass
-
-        outputPath = scene.acquisition_panel.output_path
-        # fileName = "Image"
-        # fileName = scene.file_tool.output_file_name
-
-        # Error handling
-        if outputPath == "":
-            self.report({'ERROR'}, "Output file path not set.")
-            return {'CANCELLED'}
-        # if fileName == "":
-        #     self.report({'ERROR'}, "Output file name not set.")
-        #     return {'CANCELLED'}
-
-        # Get total numbers of frames
-        numLights = len(scene.light_panel.light_list)
-
-
-        # Set filepath as well as format for iterated filenames
-        scene.render.filepath = "{0}/Renders/Image-{1}".format(outputPath,"#")
-        
-        # Make sure Cycles is set as render engine
-        scene.render.engine = 'CYCLES'
-
-        # Image output settings
-        scene.render.image_settings.file_format = "PNG"
-        scene.render.image_settings.color_mode = "RGB"
-        scene.render.image_settings.color_depth = "8"
-
-        # Set color management to linear (?)
-        scene.display_settings.display_device = 'None'
-
-        # Disable overwriting of output images by default
-        scene.render.use_overwrite = False
-
-        # Set render passes
-        current_render_layer = scene.view_layers['ViewLayer']
-        # current_render_layer = scene.view_layers.active
-        current_render_layer.use_pass_combined = True
-        current_render_layer.use_pass_z = True
-        current_render_layer.use_pass_normal = True
-        current_render_layer.use_pass_shadow = True
-        current_render_layer.use_pass_diffuse_direct = True
-        current_render_layer.use_pass_diffuse_indirect = True
-        current_render_layer.use_pass_diffuse_color = True
-        current_render_layer.use_pass_glossy_direct = True
-        current_render_layer.use_pass_glossy_indirect = True
-        current_render_layer.use_pass_glossy_color = True
-
-        # Create nodes for Render Layers, map range, normalization, and output files
-        ## NOTE: Positioning of nodes isn't considered as it's not important for background processes.
-        render_layers_node = scene.node_tree.nodes.new(type="CompositorNodeRLayers")
-        # normalize_node = scene.node_tree.nodes.new(type="CompositorNodeNormalize")
-        output_node_z = scene.node_tree.nodes.new(type="CompositorNodeOutputFile")
-        output_node_normal = scene.node_tree.nodes.new(type="CompositorNodeOutputFile")
-
-        # if not scene.sff_tool.focus_limits_auto:
-        #     # Set map range node settings
-        #     map_range_node = scene.node_tree.nodes.new(type="CompositorNodeMapRange")
-        #     map_range_node.use_clamp = True
-        #     map_range_node.inputs[2].default_value = scene.camera_panel.camera_height
-        #     # map_range_node.inputs[1].default_value = (scene.sff_tool.camera_height - np.max(scene.sff_tool.zPosList))
-        #     map_range_node.inputs[1].default_value = (scene.camera_panel.camera_height - scene.sff_tool.max_z_pos)
-
-        #     # Link nodes together
-        #     scene.node_tree.links.new(render_layers_node.outputs['Depth'], map_range_node.inputs['Value'])
-        #     scene.node_tree.links.new(map_range_node.outputs['Value'], output_node_z.inputs['Image'])
-
-        # elif scene.sff_tool.focus_limits_auto:
-        normalize_node = scene.node_tree.nodes.new(type="CompositorNodeNormalize")
-
-            # Link nodes together
-        scene.node_tree.links.new(render_layers_node.outputs['Depth'], normalize_node.inputs['Value'])
-        scene.node_tree.links.new(normalize_node.outputs['Value'], output_node_z.inputs['Image'])
-
-        # Set normal node output
-        scene.node_tree.links.new(render_layers_node.outputs['Normal'], output_node_normal.inputs['Image'])
-
-        # Set output filepaths
-        output_node_z.base_path = scene.file_tool.output_path + "/Depth/"
-        output_node_normal.base_path = scene.file_tool.output_path + "/Normal/"
+        bpy.context.scene.render.engine = 'CYCLES'
+        bpy.context.scene.cycles.device = 'GPU'
+        bpy.context.scene.cycles.preview_samples = 1024
+        bpy.context.scene.cycles.samples = 4000
+        bpy.context.scene.cycles.use_preview_denoising = True
+        bpy.context.scene.cycles.use_denoising = True
+        bpy.context.scene.render.resolution_x = int(1920*context.scene.camera_panel.resolution_factor) 
+        bpy.context.scene.render.resolution_y = int(1080*context.scene.camera_panel.resolution_factor)
+        # bpy.context.scene.render.use_border = True
+        # bpy.context.scene.render.use_crop_to_border = True
+        bpy.context.scene.frame_start = 1
+        bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path
+        bpy.context.scene.render.image_settings.color_mode = 'BW'
+        bpy.context.scene.render.image_settings.color_depth = '8'
+        bpy.context.scene.render.use_overwrite = True
+        context.scene.camera = context.scene.objects[context.scene.camera_panel.camera[0]] 
+        bpy.ops.render.play_rendered_anim() 
+        if not context.scene.light_panel.nblp:
+            bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
+            bpy.ops.rti.set_animation()
+            bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
+            
 
         return {'FINISHED'}
 
@@ -626,11 +551,9 @@ class camera_panel(Panel):
         cameratool = scene.camera_panel
         layout.label(text="Camera")
         layout.prop(cameratool, "camera_height", slider=True)
-        layout.prop(cameratool, "focus", slider=True)
-        layout.prop(cameratool, "aperture", slider=True)
+        layout.prop(cameratool, "ortho_scale", slider=True)
         layout.prop(cameratool, "subject")
-        layout.prop(cameratool, "resolution")
-        layout.prop(cameratool, "sensor_width")
+        layout.prop(cameratool, "resolution_factor")
         row = layout.row(align = True)
         row.operator("rti.create_camera")
 
@@ -646,8 +569,8 @@ class acquisition_panel(Panel):
         scene = context.scene        
         layout.label(text="Acquisition")
         layout.prop(scene.acquisition_panel, "output_path")
-        layout.operator("rti.set_animation")
-        layout.operator("rti.set_render")
+        # layout.operator("rti.set_animation")
+        layout.operator("rti.acquire")
         row = layout.row(align = True)
         row.operator("rti.reset_scene")
     
@@ -665,7 +588,7 @@ classes = (reset_scene,
             importSurface,
             addTexture,
             SetAnimation,
-            SetRender,
+            acquire,
             rti_panel,
             surface_panel,
             light_panel,             
