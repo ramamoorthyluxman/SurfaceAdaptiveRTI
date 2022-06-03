@@ -26,6 +26,8 @@ import os
 import bpy
 import numpy as np
 import math
+import cv2
+import numpy as np
 from mathutils import Vector
 from bpy.props import (StringProperty,
                        BoolProperty,
@@ -40,7 +42,11 @@ from bpy.types import (Panel,
                        PropertyGroup,
                        )
 
+#################################### Global vars ################################
+updated_lps = []
+
 #################################### Helpers ####################################
+
 def Cartesian2Polar3D(x, y, z):
     """
     Takes X, Y, and Z coordinates as input and converts them to a polar
@@ -73,7 +79,105 @@ def Polar2Cartesian3D(r, longitude, latitude):
 
     return x, y, z
 
-# def generate_homogenous_theta(n):
+
+def read_lp_file(file_path, dome_radius):
+    light_positions = []
+    # Read in .lp data
+    try:
+        # file = open(mytool.lp_file_path)
+        file = open(file_path)
+    except RuntimeError as ex:
+        error_report = "\n".join(ex.args)
+        print("Caught error:", error_report)
+        return {'ERROR'}
+
+    rows = file.readlines()
+    file.close()
+
+    # Parse for number of lights
+    numLights = int(rows[0].split()[0])
+
+    for idx in range(1, numLights + 1):
+        cols = rows[idx].split()
+        x = float(cols[1])
+        y = float(cols[2])
+        z = float(cols[3])
+
+        r, long, lat = Cartesian2Polar3D(x,y,z)
+        # r = mytool.dome_radius
+        r = dome_radius
+        x, y, z = Polar2Cartesian3D(r,long,lat)
+        light_positions.append((x,y,z))
+    
+    return light_positions    
+
+
+
+class Nblp:
+    iterations = []
+    class iteration:
+        def __init__(self, lps_polar, lps_cartesian, iteration_nb):
+            self.lps_polar = lps_polar
+            self.nb_images = len(lps_polar)
+            self.lps_cartesian = lps_cartesian
+            self.filenames_subtext = "nblp_iteration_"+str(iteration_nb)+"_"
+            
+    def __init__(self):
+        iteration_nb = len(self.iterations)
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=12, dome_radius=1.0, phi=math.radians(5.0), iteration_nb=iteration_nb)        
+        self.dome_radius = 0.0
+        step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
+        self.iterations.append(step)
+
+    def dense_acquisition(self):   
+        iteration_nb = len(self.iterations)     
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=120, dome_radius=1.0, phi=math.radians(5.0), iteration_nb=iteration_nb)
+        self.dome_radius = 0.0
+        step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
+        self.iterations.append(step)
+
+    def generate_homogenous_points_along_theta(self, n, dome_radius, phi, iteration_nb):
+        light_positions_cartesian = []
+        light_positions_polar = []
+        self.dome_radius = dome_radius
+        for i in range(0,n+1):
+            theta = i*(math.radians(360.0)/n)
+            x, y, z = Polar2Cartesian3D(dome_radius, theta, phi)
+            light_positions_cartesian.append((x,y,z))
+            light_positions_polar.append((theta, phi))
+
+        return  light_positions_polar, light_positions_cartesian
+
+    def calculate_entropies(self,iteration_nb, file_path):
+        print("Calculating entropies")
+        img_path = file_path+"\\..\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(1)+".png"
+        img_sum = cv2.imread(img_path)
+        for i in range(0, self.iterations[iteration_nb].nb_images):
+            img_path = file_path+"\\..\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
+            print(img_path)
+            img = cv2.imread(img_path)
+            img_sum = cv2.addWeighted(img_sum,0.5,img,0.5,0)
+        
+
+        for i in range(0, self.iterations[iteration_nb].nb_images):
+            img_path = file_path+"\\..\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
+            img_diff = cv2.absdiff(img_sum,cv2.imread(img_path))
+            normalized_img_diff = np.zeros(img_diff.shape)
+            min_val = img_diff[..., 0].min()
+            max_val = img_diff[..., 0].max()
+            normalized_img_diff = img_diff * (255/(max_val-min_val))
+            # cv2.normalize(img_diff, normalized_img_diff, min_val, max_val, cv2.NORM_MINMAX)
+            cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+".png", img_diff)
+            cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+"_normalized.png", normalized_img_diff)
+
+    def generate_lp_file(self, iteration_nb, file_path):
+        data = str(self.iterations[iteration_nb].nb_images)
+        for i in range(0, self.iterations[iteration_nb].nb_images):
+            step =self.iterations[iteration_nb] 
+            data = data+"\n"+step.filenames_subtext+str(i)+".png\t"+str(step.lps_cartesian[i][0])+"\t"+str(step.lps_cartesian[i][1])+"\t"+str(step.lps_cartesian[i][2])
+        with open(file_path, 'w') as f:
+            f.write(data)
+
 
 
 
@@ -98,7 +202,6 @@ class surface(bpy.types.PropertyGroup):
 
 
 class lightSettings(PropertyGroup):
-
     nblp: BoolProperty(   
         name="NBLP", 
         description="NBLP algorithm generated Light Positions",
@@ -110,7 +213,7 @@ class lightSettings(PropertyGroup):
         subtype="FILE_PATH",
         description="File path for light positions file (.lp)",
         default="",
-        maxlen=1024
+        maxlen=1024, 
     )
 
     dome_radius : FloatProperty(
@@ -118,7 +221,7 @@ class lightSettings(PropertyGroup):
         description="Radius of RTI dome [m]",
         default=1.0
     )
-
+    light_positions = []
     light_list = []
 
 class surfaceSettings(PropertyGroup):
@@ -262,12 +365,12 @@ class reset_scene(Operator):
 
         return {"FINISHED"} 
 
-
 class createLights(Operator):
     bl_label = "Create lights"
     bl_idname = "rti.create_lights"
     
     def execute(self, context):
+        global updated_lps
         scene = context.scene
         mytool = scene.light_panel
         mytool.light_list.clear()
@@ -282,42 +385,23 @@ class createLights(Operator):
             bpy.ops.object.select_all(action='DESELECT')
         except:
             pass
-
         
+        mytool.light_positions = updated_lps
 
         if not os.path.isfile(mytool.lp_file_path) and not mytool.nblp:
             self.report({"ERROR"})
 
-        light_sources = bpy.data.objects.new(name = "light_sources", object_data = None)
-        scene.collection.objects.link(light_sources)        
+        light_sources = bpy.context.scene.objects.get("light_sources")
+        if not light_sources:
+            light_sources = bpy.data.objects.new(name = "light_sources", object_data = None)
+            scene.collection.objects.link(light_sources)        
 
-        # Read in .lp data
-        try:
-            file = open(mytool.lp_file_path)
-        except RuntimeError as ex:
-            error_report = "\n".join(ex.args)
-            print("Caught error:", error_report)
-            return {'ERROR'}
-
-        rows = file.readlines()
-        file.close()
-
-        # Parse for number of lights
-        numLights = int(rows[0].split()[0])
-
-        for idx in range(1, numLights + 1):
-            cols = rows[idx].split()
-            x = float(cols[1])
-            y = float(cols[2])
-            z = float(cols[3])
-
-            r, long, lat = Cartesian2Polar3D(x,y,z)
-            r = mytool.dome_radius
-            x, y, z = Polar2Cartesian3D(r,long,lat)
+        for idx in range(0, len(mytool.light_positions)):
             lightData = bpy.data.lights.new(name="RTI_light"+str(idx), type="SUN")
 
             current_light = bpy.data.objects.new(name="Light_{0}".format(idx), object_data=lightData)
             
+            (x,y,z) = mytool.light_positions[idx]
             current_light.location = (x, y, z)
 
             scene.collection.objects.link(current_light)   
@@ -453,6 +537,7 @@ class acquire(Operator):
     bl_use_preview = True
     
     def execute(self, context):
+        global updated_lps
         bpy.context.scene.render.engine = 'CYCLES'
         bpy.context.scene.cycles.device = 'GPU'
         bpy.context.scene.cycles.preview_samples = 1024
@@ -469,12 +554,36 @@ class acquire(Operator):
         bpy.context.scene.render.image_settings.color_depth = '8'
         bpy.context.scene.render.use_overwrite = True
         context.scene.camera = context.scene.objects[context.scene.camera_panel.camera[0]] 
-        bpy.ops.render.play_rendered_anim() 
+        
         if not context.scene.light_panel.nblp:
             bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
             bpy.ops.rti.set_animation()
+            bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)            
+            bpy.ops.render.play_rendered_anim() 
+        else:
+            print("Executing NBLP")
+            nblp = Nblp()
+            updated_lps = nblp.iterations[0].lps_cartesian 
+            nblp.generate_lp_file(iteration_nb=0, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
+            bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+nblp.iterations[0].filenames_subtext+"#.png"
+            bpy.ops.rti.create_lights()
+            bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
+            bpy.ops.rti.set_animation()
             bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
-            
+            bpy.ops.render.play_rendered_anim() 
+
+            nblp.calculate_entropies(len(nblp.iterations)-1,context.scene.acquisition_panel.output_path+"\\intermediary_files\\entropies\\")
+
+            nblp.dense_acquisition()
+            updated_lps = nblp.iterations[len(nblp.iterations)-1].lps_cartesian
+            nblp.generate_lp_file(iteration_nb=1, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
+            bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+"\\..\\dense_acquisition\\"+nblp.iterations[len(nblp.iterations)-1].filenames_subtext+"#.png"
+            bpy.ops.rti.create_lights()
+            bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
+            bpy.ops.rti.set_animation()
+            bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
+            bpy.ops.render.play_rendered_anim()            
+
 
         return {'FINISHED'}
 
@@ -500,6 +609,7 @@ class light_panel(Panel):
     bl_category = "Surface Adaptive RTI"
 
     def draw(self, context):
+        global updated_lps
         layout = self.layout
         scene = context.scene
         lighttool = scene.light_panel
@@ -509,7 +619,8 @@ class light_panel(Panel):
 
         if not lighttool.nblp:
             layout.prop(lighttool,"lp_file_path")
-            row = layout.row(align = True)
+            row = layout.row(align = True)  
+            updated_lps = read_lp_file(lighttool.lp_file_path, lighttool.dome_radius)          
             row.operator("rti.create_lights")
         else:
             for current_light in bpy.data.lights:
