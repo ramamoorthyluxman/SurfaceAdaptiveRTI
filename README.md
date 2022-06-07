@@ -10,16 +10,13 @@ Currently the plugin is developed for Blender version 3.1 and uses only the cycl
 To install the plugin go to `file -> User Preferences… -> Add-ons -> install Add-on from File…` choose the file `__init.py__` and press on `Install Add-on from File…` . Once installed it need to be activated.  The plugin will be available on the 3DView on the Tool tab.
 
 ## Usage
-![plugin](https://github.com/giach68/SyntheticRTI/blob/master/Documentation/plugin_full.png)
+![plugin](https://github.com/ramamoorthyluxman/SurfaceAdaptiveRTI/blob/main/display.jpg)
 
 The plugin is divided in 4 panels:
-- **Create**: its mainly purpose is to create lamps, cameras and to manage the material parameters we want to iterate over the combinations;
-- **Render**: it prepares the environment for rendering;
-- **Tools**: various tools to help building the set;
-- **Debug**: various information about the scene.
+- **Surface**: You can upload .OBJ file and texture image directly. If your 3D file is of some other format, you can import it from file->import and ignore the surface option in the plugin
+- **Lights**: If NBLP enabled, the plugin automatically configures the light positions on the go adapting to any imported surface. if disabled, .lp file can be uploaded to create lights
+- **Camera**: Create a camera and adjust its field of view and focus. 
+- **Acquisition**: Control the acquisition process
 
-## Create
-**Light file**: here you can insert the filepath of the .lp file with the position of lamps. Using the folder button it is possible to use the file select mode.  
-The .lp files are structured this way:  
 
 
