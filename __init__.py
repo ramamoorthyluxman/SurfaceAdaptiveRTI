@@ -48,7 +48,7 @@ updated_lps = []
 #################################### Helpers ####################################
 
 def Cartesian2Polar3D(x, y, z):
-    """
+    """ 
     Takes X, Y, and Z coordinates as input and converts them to a polar
     coordinate system
 
@@ -60,7 +60,7 @@ def Cartesian2Polar3D(x, y, z):
 
     longitude = math.acos(x / math.sqrt(x*x + y*y)) * (-1 if y < 0 else 1)
 
-    latitude = math.acos(z / r)
+    latitude = math.asin(z / r)
 
     return r, longitude, latitude
 
@@ -84,7 +84,6 @@ def read_lp_file(file_path, dome_radius):
     light_positions = []
     # Read in .lp data
     try:
-        # file = open(mytool.lp_file_path)
         file = open(file_path)
     except RuntimeError as ex:
         error_report = "\n".join(ex.args)
@@ -150,25 +149,29 @@ class Nblp:
 
     def calculate_entropies(self,iteration_nb, file_path):
         print("Calculating entropies")
-        img_path = file_path+"\\..\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(1)+".png"
+        img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(1)+".png"
         img_sum = cv2.imread(img_path)
         for i in range(0, self.iterations[iteration_nb].nb_images):
-            img_path = file_path+"\\..\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
+            img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
             print(img_path)
             img = cv2.imread(img_path)
             img_sum = cv2.addWeighted(img_sum,0.5,img,0.5,0)
         
 
         for i in range(0, self.iterations[iteration_nb].nb_images):
-            img_path = file_path+"\\..\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
+            img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
             img_diff = cv2.absdiff(img_sum,cv2.imread(img_path))
             normalized_img_diff = np.zeros(img_diff.shape)
-            min_val = img_diff[..., 0].min()
-            max_val = img_diff[..., 0].max()
+            # min_val = img_diff[..., 0].min()
+            # max_val = img_diff[..., 0].max()
+            min_val = img_diff.min()
+            max_val = img_diff.max()
             normalized_img_diff = img_diff * (255/(max_val-min_val))
             # cv2.normalize(img_diff, normalized_img_diff, min_val, max_val, cv2.NORM_MINMAX)
-            cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+".png", img_diff)
-            cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+"_normalized.png", normalized_img_diff)
+            if not os.path.exists(file_path):
+                os.makedirs(file_path)
+                cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+".png", img_diff)
+                cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+"_normalized.png", normalized_img_diff)
 
     def generate_lp_file(self, iteration_nb, file_path):
         data = str(self.iterations[iteration_nb].nb_images)
@@ -572,7 +575,7 @@ class acquire(Operator):
             bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
             bpy.ops.render.play_rendered_anim() 
 
-            nblp.calculate_entropies(len(nblp.iterations)-1,context.scene.acquisition_panel.output_path+"\\intermediary_files\\entropies\\")
+            nblp.calculate_entropies(len(nblp.iterations)-1,context.scene.acquisition_panel.output_path+"\\entropies\\")
 
             nblp.dense_acquisition()
             updated_lps = nblp.iterations[len(nblp.iterations)-1].lps_cartesian
