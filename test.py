@@ -8,6 +8,7 @@ import os
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.collections import PolyCollection
 import matplotlib
+from matplotlib import cm 
 
 #############################################################################################################
 
@@ -186,65 +187,126 @@ def read_lp_file(file_path, dome_radius):
 ######################################local alpha plots##########################################################
 
 
-window_size_factor = 100
+# window_size_factor = 100
+# imdir = "D:\\imvia_phd\\data\\nblp_v2\\nblp_acquisition\\stone\\theta_85\\alpha_images\\global\\"
+# save_path = "D:\\imvia_phd\\data\\nblp_v2\\nblp_acquisition\\stone\\theta_85\\alpha_images\\local\\"
+# ext = ['png', 'jpg', 'gif']    # Add image formats here
+
+# files = []
+# [files.extend(glob.glob(imdir + '*.' + e)) for e in ext]
+
+# image = cv2.imread(files[0], cv2.IMREAD_GRAYSCALE)
+# windows_rows = int(image.shape[1]/window_size_factor)
+# windows_cols = int(image.shape[0]/window_size_factor)
+
+# local_maxs = []
+# local_mins = []
+
+# for p in range(0, window_size_factor):
+#     local_mins_row = []
+#     local_maxs_row = []
+#     for q in range(0, window_size_factor):
+#         local_min = 100000
+#         local_max = 0
+#         for i in range(0, len(files)):
+#             img = cv2.imread(files[i], cv2.IMREAD_GRAYSCALE)
+#             w = img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows]
+#             min_val = 0           
+#             if w[np.nonzero(w)].size != 0:
+#                 min_val = np.min(w[np.nonzero(w)])
+#             max_val = w.max()
+#             if min_val < local_min:
+#                 local_min = min_val
+#             if max_val > local_max:
+#                 local_max = max_val
+#         local_mins_row.append(local_min)
+#         local_maxs_row.append(local_max)
+#     local_mins.append(local_mins_row)
+#     local_maxs.append(local_maxs_row)
+
+# for i in range(0, len(files)):
+#     img = cv2.imread(files[i], cv2.IMREAD_GRAYSCALE)
+#     normalized_img = np.zeros(img.shape)            
+#     for p in range(0, window_size_factor):
+#         for q in range(0, window_size_factor):
+#             w_img = np.array(img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows])
+#             w_img = w_img-local_mins[p][q]
+#             w_img[w_img<0] = 0
+#             w_img[np.isnan(w_img)] = 0
+#             if (local_maxs[p][q]-local_mins[p][q]) != 0:
+#                 normalized_img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows] = (255/(local_maxs[p][q]-local_mins[p][q])) * w_img
+#             else:
+#                 normalized_img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows] = 0*w_img
+#             normalized_img[np.isnan(normalized_img)] = 0
+#             print("*******")
+#             print(local_maxs[p][q])
+#             print(local_mins[p][q])
+#             # print((255/(local_maxs[p][q]-local_mins[p][q])))
+#             # # print(img[(p*windows_cols):((p*windows_cols)+windows_cols), (q*windows_rows):((q*windows_rows)+windows_rows)].max())
+#             # # print(img[(p*windows_cols):((p*windows_cols)+windows_cols), (q*windows_rows):((q*windows_rows)+windows_rows)].min())
+#             print(img.max())
+#     file_name = os.path.basename(files[i])
+#     cv2.imwrite(save_path+"normalized_"+file_name, normalized_img)
+#     # print(normalized_img.max())
+#     # print(normalized_img.min())
+
+######################################local alpha contour plots##########################################################
+
 imdir = "D:\\imvia_phd\\data\\nblp_v2\\nblp_acquisition\\stone\\theta_85\\alpha_images\\global\\"
-save_path = "D:\\imvia_phd\\data\\nblp_v2\\nblp_acquisition\\stone\\theta_85\\alpha_images\\local\\"
 ext = ['png', 'jpg', 'gif']    # Add image formats here
 
 files = []
 [files.extend(glob.glob(imdir + '*.' + e)) for e in ext]
 
-image = cv2.imread(files[0], cv2.IMREAD_GRAYSCALE)
-windows_rows = int(image.shape[1]/window_size_factor)
-windows_cols = int(image.shape[0]/window_size_factor)
 
-local_maxs = []
-local_mins = []
+light_positions = read_lp_file("D:\\imvia_phd\\data\\nblp_v2\\nblp_acquisition\\stone\\theta_85\\iteration_0.lp", 1.0)
+light_poses = []
 
-for p in range(0, window_size_factor):
-    local_mins_row = []
-    local_maxs_row = []
-    for q in range(0, window_size_factor):
-        local_min = 100000
-        local_max = 0
-        for i in range(0, len(files)):
-            img = cv2.imread(files[i], cv2.IMREAD_GRAYSCALE)
-            w = img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows]
-            min_val = 0           
-            if w[np.nonzero(w)].size != 0:
-                min_val = np.min(w[np.nonzero(w)])
-            max_val = w.max()
-            if min_val < local_min:
-                local_min = min_val
-            if max_val > local_max:
-                local_max = max_val
-        local_mins_row.append(local_min)
-        local_maxs_row.append(local_max)
-    local_mins.append(local_mins_row)
-    local_maxs.append(local_maxs_row)
+r = []
+theta = []
 
-for i in range(0, len(files)):
-    img = cv2.imread(files[i], cv2.IMREAD_GRAYSCALE)
-    normalized_img = np.zeros(img.shape)            
-    for p in range(0, window_size_factor):
-        for q in range(0, window_size_factor):
-            w_img = np.array(img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows])
-            w_img = w_img-local_mins[p][q]
-            w_img[w_img<0] = 0
-            w_img[np.isnan(w_img)] = 0
-            if (local_maxs[p][q]-local_mins[p][q]) != 0:
-                normalized_img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows] = (255/(local_maxs[p][q]-local_mins[p][q])) * w_img
-            else:
-                normalized_img[(p*windows_cols):(p*windows_cols)+windows_cols, (q*windows_rows):(q*windows_rows)+windows_rows] = 0*w_img
-            normalized_img[np.isnan(normalized_img)] = 0
-            print("*******")
-            print(local_maxs[p][q])
-            print(local_mins[p][q])
-            # print((255/(local_maxs[p][q]-local_mins[p][q])))
-            # # print(img[(p*windows_cols):((p*windows_cols)+windows_cols), (q*windows_rows):((q*windows_rows)+windows_rows)].max())
-            # # print(img[(p*windows_cols):((p*windows_cols)+windows_cols), (q*windows_rows):((q*windows_rows)+windows_rows)].min())
-            print(img.max())
-    file_name = os.path.basename(files[i])
-    cv2.imwrite(save_path+"normalized_"+file_name, normalized_img)
-    # print(normalized_img.max())
-    # print(normalized_img.min())
+
+for i in range(0,len(light_positions)):
+    light_poses = (Cartesian2Polar3D(light_positions[i][0], light_positions[i][1], light_positions[i][2]))
+
+    file = files[i]
+    # fig = plt.figure()
+    img = cv2.imread(file, cv2.IMREAD_GRAYSCALE) 
+    downscale_size = 1.0
+    width = int(img.shape[0]*downscale_size)
+    height = int(img.shape[1]*downscale_size)
+
+    r.append(img.mean())
+    theta.append(light_poses[0])
+
+    fig, ax = plt.subplots(subplot_kw={'projection': 'polar'})
+    ax.plot(theta, r)
+    ax.set_rmax(2)
+    ax.set_rticks([0.5, 1, 1.5, 2])  # Less radial ticks
+    ax.set_rlabel_position(-22.5)  # Move radial labels away from plotted line
+    ax.grid(True)
+
+    ax.set_title("A line plot on a polar axis", va='bottom')
+    plt.show()
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+########################################################################################################################
