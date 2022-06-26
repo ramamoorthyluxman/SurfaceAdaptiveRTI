@@ -79,7 +79,7 @@ def Polar2Cartesian3D(r, longitude, latitude):
 
     x = r * math.sin(latitude) * math.cos(longitude)
     y = r * math.sin(latitude) * math.sin(longitude)
-    z = r * math.cos(latitude)
+    z = r * math.sin(latitude)
 
     return x, y, z
 
@@ -116,9 +116,7 @@ def read_lp_file(file_path, dome_radius):
         x, y, z = Polar2Cartesian3D(r,long,lat)
         light_positions.append((x,y,z))
     
-    return light_positions    
-
-
+    return light_positions   
 
 class Nblp:
     iterations = []
@@ -153,15 +151,13 @@ class Nblp:
             
     def __init__(self):
         iteration_nb = len(self.iterations)
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=40, dome_radius=1.0, phi=math.radians(30.0), iteration_nb=iteration_nb)        
-        self.dome_radius = 0.0
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=30, dome_radius=1, phi=math.radians(5.0), iteration_nb=iteration_nb)        
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
     def dense_acquisition(self):   
         iteration_nb = len(self.iterations)     
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=150, dome_radius=1.0, phi=math.radians(30.0), iteration_nb=iteration_nb)
-        self.dome_radius = 0.0
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=150, dome_radius=1, phi=math.radians(5.0), iteration_nb=iteration_nb)
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
@@ -209,7 +205,7 @@ class Nblp:
         data = str(self.iterations[iteration_nb].nb_images)
         for i in range(0, self.iterations[iteration_nb].nb_images):
             step =self.iterations[iteration_nb] 
-            data = data+"\n"+step.filenames_subtext+str(i)+".png\t"+str(step.lps_cartesian[i][0])+"\t"+str(step.lps_cartesian[i][1])+"\t"+str(step.lps_cartesian[i][2])
+            data = data+"\n"+step.filenames_subtext+str(i+1)+".png\t"+str(step.lps_cartesian[i][0])+"\t"+str(step.lps_cartesian[i][1])+"\t"+str(step.lps_cartesian[i][2])
         with open(file_path, 'w') as f:
             f.write(data)
 
@@ -273,7 +269,7 @@ class lightSettings(PropertyGroup):
     light_strength : FloatProperty(
         name="Light strength",
         description="Strength of the light source",
-        default=2
+        default=0.5
     )
 
     light_positions = []
@@ -346,6 +342,8 @@ class cameraSettings(PropertyGroup):
         data = bpy.data.objects[context.scene.camera_panel.camera[0]].data
         data.lens = self.focal_length
         bpy.context.scene.render.resolution_y = int(self.aspect_ratio*bpy.context.scene.render.resolution_x)
+        data.display_size = self.view_port_size
+        data.sensor_width = self.sensor_size
 
     def update_camera_height(self,context):
         cameras_obj = [cam for cam in bpy.data.objects if cam.type == 'CAMERA']
@@ -359,9 +357,9 @@ class cameraSettings(PropertyGroup):
     camera_height : FloatProperty(
         name="Camera height",
         description="Camera position height",
-        default=1.03,
+        default=1,
         min=0,
-        max=3.0,        
+        max=4.0,        
         update=update_camera_height
     )
     
@@ -375,9 +373,9 @@ class cameraSettings(PropertyGroup):
     )
 
     focal_length : FloatProperty(
-        name="focal_length", 
+        name="Focal length", 
         description="Focal length",
-        default=50,
+        default=199.6,
         min=0.000,
         max=1000,  
         step=1,   
@@ -398,6 +396,24 @@ class cameraSettings(PropertyGroup):
         min=0,
         max=5,
         default=1.0,
+        update=update
+    )
+
+    view_port_size : FloatProperty(
+        name="View port size",
+        description="View port size",
+        min=0,
+        max=100,
+        default=0.04,
+        update=update
+    )
+
+    sensor_size : FloatProperty(
+        name="Sensor size",
+        description="Sensor size",
+        min=0,
+        max=1000,
+        default=8,
         update=update
     )
 
@@ -440,13 +456,11 @@ class createLights(Operator):
         scene = context.scene
         mytool = scene.light_panel
         mytool.light_list.clear()
-
-        # light_obj = [light for light in bpy.data.objects if light.type == 'LIGHT']
-        # for light in light_obj:
-        #     light.animation_data_clear()
-        #     bpy.data.lights.remove(light)
-
-              
+        
+        for current_light in bpy.data.lights:
+            current_light.animation_data_clear()
+            bpy.data.lights.remove(current_light)
+                      
         mytool.light_positions = updated_lps
 
         if not os.path.isfile(mytool.lp_file_path) and not mytool.nblp:
@@ -461,6 +475,7 @@ class createLights(Operator):
             lightData = bpy.data.lights.new(name="RTI_light"+str(idx), type="SUN")
 
             current_light = bpy.data.objects.new(name="Light_{0}".format(idx), object_data=lightData)
+            # current_light.data.angle = 1.5708
             
             (x,y,z) = mytool.light_positions[idx]
             current_light.location = (x, y, z)
@@ -573,23 +588,26 @@ class SetAnimation(Operator):
         if context.scene.camera_panel.subject is not None:
             data.dof.focus_object = context.scene.camera_panel.subject
 
-        
         numLights = len(scene.light_panel.light_list)
+
+        print("Setting new animation with",numLights)
 
         for i in range(0, numLights):
             current_light = bpy.data.objects[scene.light_panel.light_list[i]]
-            current_light.data.energy = 0  
-            current_light.data.keyframe_insert(data_path="energy", frame=1)
-            
+            current_light.data.energy = 0.0  
+
         
-        for i in range(0, numLights):
-            current_light = bpy.data.objects[scene.light_panel.light_list[i]] 
-            current_light.data.energy = scene.light_panel.light_strength
-            current_light.data.keyframe_insert(data_path="energy", frame=i+1)
-            current_light.data.energy = 0
-            current_light.data.keyframe_insert(data_path="energy", frame=i+2)
-
-
+        for k in range(0, numLights):
+            for i in range(0, numLights):
+                current_light = bpy.data.objects[scene.light_panel.light_list[i]]
+                if i != k:                
+                    current_light.data.energy = 0.0  
+                    current_light.data.keyframe_insert(data_path="energy", frame=k+1)
+                else:
+                    current_light.data.energy = scene.light_panel.light_strength  
+                    current_light.data.keyframe_insert(data_path="energy", frame=k+1)
+        
+        
         return {'FINISHED'}
 
 class acquire(Operator):
@@ -607,8 +625,6 @@ class acquire(Operator):
         bpy.context.scene.cycles.use_denoising = True
         bpy.context.scene.render.resolution_x = int(1920*context.scene.camera_panel.resolution_factor) 
         bpy.context.scene.render.resolution_y = int(context.scene.camera_panel.aspect_ratio*bpy.context.scene.render.resolution_x)
-        # bpy.context.scene.render.use_border = True
-        # bpy.context.scene.render.use_crop_to_border = True
         bpy.context.scene.frame_start = 1
         bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path
         bpy.context.scene.render.image_settings.color_mode = 'BW'
@@ -621,9 +637,11 @@ class acquire(Operator):
             bpy.ops.rti.set_animation()
             bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)            
             bpy.ops.render.play_rendered_anim() 
+            
         else:
             print("Executing NBLP")
             nblp = Nblp()
+            
             updated_lps = nblp.iterations[0].lps_cartesian 
             nblp.generate_lp_file(iteration_nb=0, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
             bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+nblp.iterations[0].filenames_subtext+"#.png"
@@ -734,6 +752,8 @@ class camera_panel(Panel):
         layout.prop(cameratool, "focal_length", slider=True)
         layout.prop(cameratool, "subject")
         layout.prop(cameratool, "resolution_factor")
+        layout.prop(cameratool, "view_port_size", slider=True)
+        layout.prop(cameratool, "sensor_size", slider=True)
         row = layout.row(align = True)
         row.operator("rti.create_camera")
 
