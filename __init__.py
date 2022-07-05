@@ -49,38 +49,19 @@ updated_lps = []
 
 #################################### Helpers ####################################
 
-def Cartesian2Polar3D(x, y, z):
-    """ 
-    Takes X, Y, and Z coordinates as input and converts them to a polar
-    coordinate system
-
-    Source: https://stackoverflow.com/questions/10868135/cartesian-to-polar-3d-coordinates
-
-    """
-
-    r = math.sqrt(x*x + y*y + z*z)
-
-    longitude = 0
-    if x != 0 or y != 0:
-        longitude = math.acos(x / math.sqrt(x*x + y*y)) * (-1 if y < 0 else 1)
-
-    latitude = math.asin(z / r)
-
-    return r, longitude, latitude
+def cart2sph(x, y, z):
+    hxy = np.hypot(x, y)
+    r = np.hypot(hxy, z)
+    el = np.arctan2(z, hxy)
+    az = np.arctan2(y, x)
+    return r, az, el
 
 
-def Polar2Cartesian3D(r, longitude, latitude):
-    """
-    Takes, r, longitude, and latitude coordinates in a polar coordinate
-    system and converts them to a 3D cartesian coordinate system
-
-    Source: https://stackoverflow.com/questions/10868135/cartesian-to-polar-3d-coordinates
-    """
-
-    x = r * math.sin(latitude) * math.cos(longitude)
-    y = r * math.sin(latitude) * math.sin(longitude)
-    z = r * math.sin(latitude)
-
+def sph2cart(az, el, r):
+    rcos_theta = r * np.cos(el)
+    x = rcos_theta * np.cos(az)
+    y = rcos_theta * np.sin(az)
+    z = r * np.sin(el)
     return x, y, z
 
 
@@ -109,11 +90,9 @@ def read_lp_file(file_path, dome_radius):
         x = float(cols[1])
         y = float(cols[2])
         z = float(cols[3])
-
-        r, long, lat = Cartesian2Polar3D(x,y,z)
-        # r = mytool.dome_radius
+        r, long, lat = cart2sph(x,y,z)
         r = dome_radius
-        x, y, z = Polar2Cartesian3D(r,long,lat)
+        x, y, z = sph2cart(long,lat,r)
         light_positions.append((x,y,z))
     
     return light_positions   
@@ -151,13 +130,13 @@ class Nblp:
             
     def __init__(self):
         iteration_nb = len(self.iterations)
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=30, dome_radius=1, phi=math.radians(5.0), iteration_nb=iteration_nb)        
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=3, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)        
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
     def dense_acquisition(self):   
         iteration_nb = len(self.iterations)     
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=150, dome_radius=1, phi=math.radians(5.0), iteration_nb=iteration_nb)
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=3, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
@@ -169,9 +148,10 @@ class Nblp:
             n = n+1
         for i in range(0,n):
             theta = i*(math.radians(360.0)/n)
-            x, y, z = Polar2Cartesian3D(dome_radius, theta, phi)
+            x, y, z = sph2cart(theta, phi, dome_radius)
             light_positions_cartesian.append((x,y,z))
             light_positions_polar.append((theta, phi))
+        
 
         return  light_positions_polar, light_positions_cartesian
 
@@ -475,7 +455,6 @@ class createLights(Operator):
             lightData = bpy.data.lights.new(name="RTI_light"+str(idx), type="SUN")
 
             current_light = bpy.data.objects.new(name="Light_{0}".format(idx), object_data=lightData)
-            # current_light.data.angle = 1.5708
             
             (x,y,z) = mytool.light_positions[idx]
             current_light.location = (x, y, z)
