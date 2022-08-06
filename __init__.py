@@ -130,13 +130,13 @@ class Nblp:
             
     def __init__(self):
         iteration_nb = len(self.iterations)
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=3, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)        
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=40, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)        
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
     def dense_acquisition(self):   
         iteration_nb = len(self.iterations)     
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=3, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=100, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
