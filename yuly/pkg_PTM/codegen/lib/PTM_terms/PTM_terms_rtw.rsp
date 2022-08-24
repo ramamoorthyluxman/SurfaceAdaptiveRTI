@@ -1,0 +1,5 @@
+PTM_terms.obj
+PTM_terms_emxAPI.obj
+PTM_terms_emxutil.obj
+PTM_terms_initialize.obj
+PTM_terms_terminate.obj

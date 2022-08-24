@@ -23,6 +23,7 @@ bl_info = {
 }
 
 import os
+from random import sample
 import bpy
 import numpy as np
 import math
@@ -31,6 +32,7 @@ import numpy as np
 from mathutils import Vector
 import matplotlib.pyplot as plot
 import yaml
+from itertools import islice
 from bpy.props import (StringProperty,
                        BoolProperty,
                        IntProperty,
@@ -44,10 +46,13 @@ from bpy.types import (Panel,
                        PropertyGroup,
                        )
 
-#################################### Global vars ################################
-updated_lps = []
 
-#################################### Helpers ####################################
+
+#################################### Global vars { ################################
+updated_lps = []
+#################################### Global vars } ################################
+
+#################################### Helpers { ####################################
 
 def cart2sph(x, y, z):
     hxy = np.hypot(x, y)
@@ -65,6 +70,8 @@ def sph2cart(az, el, r):
     return x, y, z
 
 
+# Reads the standard .lp file to extract the light positions. 
+# This function calculates just the directions - thetas and phis. The radius of the dome in the actual lp file is ignored and considers the radius passed to this function only to recreate new light positions. 
 def read_lp_file(file_path, dome_radius):
     light_positions = []
     # Read in .lp data
@@ -82,7 +89,6 @@ def read_lp_file(file_path, dome_radius):
     rows = file.readlines()
     file.close()
 
-    # Parse for number of lights
     numLights = int(rows[0].split()[0])
 
     for idx in range(1, numLights + 1):
@@ -96,6 +102,40 @@ def read_lp_file(file_path, dome_radius):
         light_positions.append((x,y,z))
     
     return light_positions   
+
+############################ Generate n evenly spaced hemispherical points { ##################################
+
+def generate_n_evenly_spaced_hemispherical_points(samples = 50):
+    samples = 2*samples
+    phi = math.pi * (3. - math.sqrt(5.))  # golden angle in radians
+    cartesian_points = []
+    polar_points = []
+    for i in range(int(samples/2), samples):
+        z = -1 + (i / float(samples - 1)) * 2  # z goes from 0 to 1
+        radius = math.sqrt(1 - z * z)  # radius at z
+        theta = phi * i  # golden angle increment
+        y = math.cos(theta) * radius
+        x = math.sin(theta) * radius
+        r, az, el = cart2sph(x,y,z)
+        # convert the angles to be in the range 0 to 2 pi
+        az = (az + np.pi) % (2 * np.pi) - np.pi
+        el = (el + np.pi) % (2 * np.pi) - np.pi
+        polar_points.append((az,el))
+        cartesian_points.append((x, y, z))            
+        
+    # plot.figure().add_subplot(111, projection='3d').scatter([p[0] for p in cartesian_points], [p[1] for p in cartesian_points], [p[2] for p in cartesian_points]);    
+    # plot.show()
+
+    return polar_points, cartesian_points
+
+
+############################ Generate n evenly spaced hemispherical points } ##################################
+
+#################################### Helpers } ####################################
+
+#################################### NBLP algorithms { ####################################
+
+#################################### NBLP Basic { ####################################
 
 class Nblp:
     iterations = []
@@ -202,10 +242,114 @@ class Nblp:
 
                 iterations.append(iteration)
             yaml.dump(iterations, file)    
+
+#################################### NBLP Basic } ####################################
+
+#################################### NBLP Basic approach 2 = Relighting loss gradient descent approach { ####################################
+
+class Nblp_2:
+    iterations = []
+    class iteration:
+        def __init__(self, lps_polar, lps_cartesian, iteration_nb):
+            self.lps_polar = lps_polar
+            self.nb_images = len(lps_polar)
+            self.lps_cartesian = lps_cartesian
+            self.filenames_subtext = "nblp_iteration_"+str(iteration_nb)+"_"
+            self.iteration_nb = iteration_nb
+            self.loss = 1.0
+
+        def plot_lps(self):
+            fig, ax = plot.subplots(subplot_kw={'projection': 'polar'})
+            for i in range(0,self.nb_images):
+                theta = self.lps_polar[i][0]
+                radius = math.degrees(self.lps_polar[i][1])
+                ax.plot(theta, radius,"o")
+                ax.set_rmax(2)
+                ax.set_rticks([90, 60, 30, 0]) 
+                ax.set_rlabel_position(-22.5)  
+                ax.grid(True)
+                ax.set_title("Light positions projected to 2D plane")
+            return plot
+
+        def rename_files(self, path):
+            for i in range(0, self.nb_images):
+                theta=str(math.floor(100*math.degrees(self.lps_polar[i][0]))/100)
+                phi=str(math.floor(100*math.degrees(self.lps_polar[i][1]))/100)
+                old_name = path+"nblp_iteration_"+str(self.iteration_nb)+"_"+str(i+1)+".png"
+                new_name = path+"nblp_iteration_"+str(self.iteration_nb)+"_"+str(i+1)+"_theta_" + theta + "_phi_" + phi + ".png"
+                os.rename(old_name, new_name)                
+            
+    def __init__(self):
+        iteration_nb = len(self.iterations)
+        lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=50)
+        print(len(lps_polar))
+        step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
+        self.iterations.append(step)
+
+    def dense_acquisition(self):   
+        iteration_nb = len(self.iterations)     
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=100, dome_radius=1, phi=math.radians(50.0), iteration_nb=iteration_nb)
+        step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
+        self.iterations.append(step)
+
+    
+    def calculate_entropies(self,iteration_nb, file_path):
+        print("Calculating entropies")
+        img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(1)+".png"
+        img_sum = cv2.imread(img_path)
+        for i in range(0, self.iterations[iteration_nb].nb_images):
+            img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
+            print(img_path)
+            img = cv2.imread(img_path)
+            img_sum = cv2.addWeighted(img_sum,0.5,img,0.5,0)
+        
+
+        for i in range(0, self.iterations[iteration_nb].nb_images):
+            img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
+            img_diff = cv2.absdiff(img_sum,cv2.imread(img_path))
+            normalized_img_diff = np.zeros(img_diff.shape)
+            # min_val = img_diff[..., 0].min()
+            # max_val = img_diff[..., 0].max()
+            min_val = img_diff.min()
+            max_val = img_diff.max()
+            normalized_img_diff = img_diff * (255/(max_val-min_val))
+            # cv2.normalize(img_diff, normalized_img_diff, min_val, max_val, cv2.NORM_MINMAX)
+            if not os.path.exists(file_path):
+                os.makedirs(file_path)
+                cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+".png", img_diff)
+                cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+"_normalized.png", normalized_img_diff)
+
+    def generate_lp_file(self, iteration_nb, file_path):
+        data = str(self.iterations[iteration_nb].nb_images)
+        for i in range(0, self.iterations[iteration_nb].nb_images):
+            step =self.iterations[iteration_nb] 
+            data = data+"\n"+step.filenames_subtext+str(i+1)+".png\t"+str(step.lps_cartesian[i][0])+"\t"+str(step.lps_cartesian[i][1])+"\t"+str(step.lps_cartesian[i][2])
+        with open(file_path, 'w') as f:
+            f.write(data)
+
+    def write_log(self, path):
+        with open(path, 'w') as file:
+            iterations = []
+            for i in range(0, len(self.iterations)):
+                iteration = [{'iteration nb': i},
+                             {'lps_polar': self.iterations[i].lps_polar},
+                             {'nb_images': self.iterations[i].nb_images},
+                             {'lps_cartesian':self.iterations[i].lps_cartesian},
+                             {'filenames_subtext': self.iterations[i].filenames_subtext},
+                             {'iteration_nb':self.iterations[i].iteration_nb}]
+
+                iterations.append(iteration)
+            yaml.dump(iterations, file) 
+
+
+
+
                 
+#################################### NBLP Basic approach 2 = Relighting loss } ####################################
 
-#################################### PropertyGroups ####################################
+#################################### NBLP algorithms } ####################################
 
+#################################### PropertyGroups { ####################################
 class light(bpy.types.PropertyGroup):
     light = bpy.props.PointerProperty(name="Light object", 
                                       type = bpy.types.Object,
@@ -223,7 +367,9 @@ class surface(bpy.types.PropertyGroup):
                                        type = bpy.types.Object,
                                        description = "Surface")
 
+#################################### PropertyGroups } ####################################
 
+#################################### Menu { ####################################
 class lightSettings(PropertyGroup):
 
     nblp: BoolProperty(   
@@ -411,9 +557,10 @@ class acquisitionSettings(PropertyGroup):
     )
     
     csvOutputLines = []
+#################################### Menu } ####################################
 
+#################################### Operators { ####################################
 
-#################################### Operators ####################################
 class reset_scene(Operator):
     bl_label = "Reset all"
     bl_idname = "rti.reset_scene"
@@ -619,7 +766,7 @@ class acquire(Operator):
             
         else:
             print("Executing NBLP")
-            nblp = Nblp()
+            nblp = Nblp_2()
             
             updated_lps = nblp.iterations[0].lps_cartesian 
             nblp.generate_lp_file(iteration_nb=0, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
@@ -633,24 +780,25 @@ class acquire(Operator):
             nblp.iterations[0].rename_files(context.scene.acquisition_panel.output_path)
             # nblp.calculate_entropies(len(nblp.iterations)-1,context.scene.acquisition_panel.output_path+"\\entropies\\")
 
-            nblp.dense_acquisition()
-            updated_lps = nblp.iterations[len(nblp.iterations)-1].lps_cartesian
-            nblp.generate_lp_file(iteration_nb=1, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
-            bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+"dense_acquisition\\"+nblp.iterations[len(nblp.iterations)-1].filenames_subtext+"#.png"
-            bpy.ops.rti.create_lights()
-            bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
-            bpy.ops.rti.set_animation()
-            bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
-            bpy.ops.render.play_rendered_anim()  
-            nblp.iterations[len(nblp.iterations)-1].plot_lps().savefig(context.scene.acquisition_panel.output_path+"dense_acquisition\\30.png")
-            nblp.iterations[len(nblp.iterations)-1].rename_files(context.scene.acquisition_panel.output_path+"dense_acquisition\\")  
+            # nblp.dense_acquisition()
+            # updated_lps = nblp.iterations[len(nblp.iterations)-1].lps_cartesian
+            # nblp.generate_lp_file(iteration_nb=1, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
+            # bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+"dense_acquisition\\"+nblp.iterations[len(nblp.iterations)-1].filenames_subtext+"#.png"
+            # bpy.ops.rti.create_lights()
+            # bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
+            # bpy.ops.rti.set_animation()
+            # bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
+            # bpy.ops.render.play_rendered_anim()  
+            # nblp.iterations[len(nblp.iterations)-1].plot_lps().savefig(context.scene.acquisition_panel.output_path+"dense_acquisition\\30.png")
+            # nblp.iterations[len(nblp.iterations)-1].rename_files(context.scene.acquisition_panel.output_path+"dense_acquisition\\")  
 
             nblp.write_log(context.scene.acquisition_panel.output_path+"log.yaml")        
 
 
         return {'FINISHED'}
 
-#################################### Panels #######################################
+#################################### Operators } ####################################
+#################################### Panels { #######################################
 class rti_panel(Panel):
 
     bl_label = "Surface Adaptive RTI"
@@ -752,8 +900,10 @@ class acquisition_panel(Panel):
         layout.operator("rti.acquire")
         row = layout.row(align = True)
         row.operator("rti.reset_scene")
+
+#################################### Panels } #######################################
     
-#################################### Register classes #######################################
+#################################### Register classes { #######################################
 classes = (reset_scene, 
             light, 
             camera, 
@@ -792,3 +942,5 @@ def unregister():
 
 if __name__ == "__main__":
     register()
+
+#################################### Register classes } #######################################
