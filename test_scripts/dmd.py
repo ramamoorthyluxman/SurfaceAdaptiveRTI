@@ -1,17 +1,24 @@
+from tracemalloc import start
 import cv2
 import random 
 import numpy as np
 import os
 import glob 
 import matlab.engine
+import time
+
+print("Initiating the matlab engine.")
+start_t = time.time()
 eng = matlab.engine.start_matlab()
+print("Done initiating the matlab engine. Time taken: ", time.time() - start_t)
 
-eng.addpath("C:\\Users\\Ramamoorthy_Luxman\\OneDrive - Université de Bourgogne\\imvia\\work\\codes\\matlab\\yuly\\pkg_py")
-eng.addpath("C:\\Users\\Ramamoorthy_Luxman\\OneDrive - Université de Bourgogne\\imvia\\work\\codes\\matlab\\yuly\\pkg_fcns")
-eng.addpath("C:\\Users\\Ramamoorthy_Luxman\\OneDrive - Université de Bourgogne\\imvia\\work\\codes\\matlab\\yuly\\pkg_DMD")
-eng.addpath("C:\\Users\\Ramamoorthy_Luxman\\OneDrive - Université de Bourgogne\\imvia\\work\\codes\\matlab\\yuly\\pkg_DMD\\DMD_basis")
+print("Adding all matlab function paths.")
+start_t = time.time()
+matlab_functions_dir = "C:\\Users\\Ramamoorthy_Luxman\\OneDrive - Université de Bourgogne\\imvia\\work\\nblp\\SurfaceAdaptiveRTI\\matlab_functions\\"
+for subdir, dirs, files in os.walk(matlab_functions_dir):
+    eng.addpath(subdir)
+print("Done adding all the matlab function paths. Time taken: ", time.time() - start_t)
 
-rootdir = "D:\\imvia_phd\\data\\nblp_v2\\nblp_2_acquisitions\\brushed_metal\\simple_brushed_metal\\"
 
 def cart2sph(x, y, z):
     hxy = np.hypot(x, y)
@@ -55,55 +62,38 @@ def read_lp_file(file_path):
 
     return light_positions, image_files
 
+rootdir = "D:\\imvia_phd\\data\\nblp_v2\\nblp_2_acquisitions\\brushed_metal\\simple_brushed_metal\\"
+
+print("Calculating the DMD coeffs.")
+start_t = time.time()
+acquisition = eng.get_dmd_coeffs(rootdir)
+print("Done calculating the DMD coeffs. Time taken: ", time.time() - start_t)
+
+dataset_dir =  rootdir+"\\"
+lp_file = dataset_dir + "iteration_0.lp"
+
 images = []
-img_file = rootdir+"nblp_iteration_0_1_theta_54.61_phi_0.57.png"
-img = cv2.imread(img_file, cv2.IMREAD_GRAYSCALE)
-h,w = img.shape
-x = []
-y = []
-z = []
-lps = []
-images = []
-    
-for subdir, dirs, files in os.walk(rootdir):  
-    dataset_dir =  subdir+"\\"
-    lp_file = dataset_dir + "iteration_0.lp"
-    if not os.path.exists(lp_file):
-        continue
+xs = []
+ys = []
+zs = []
+thetas = []
+phis = []
+if os.path.exists(lp_file):    
     light_positions, image_files = read_lp_file(lp_file)    
-    for i in range(0, len(light_positions)):
+    for i in range(0, len(light_positions)):    
         filename = image_files[i].split('.')[0]    
         img_file = glob.glob(dataset_dir+filename+"_*.png")[0]
-        img = cv2.imread(img_file, cv2.IMREAD_GRAYSCALE)
-        # normalize_factor = 255 * np.ones(np.array(img).shape)
-        # normalised_image = img/255
-        images.append(img)
-        x.append(light_positions[i][0])
-        y.append(light_positions[i][1])
-        z.append(light_positions[i][2])
-        print("*****")
+        acquired_img = cv2.imread(img_file, cv2.IMREAD_GRAYSCALE)    
+        x, y, z =   light_positions[i][0], light_positions[i][1], light_positions[i][2]
+        xs.append(x)
+        ys.append(y)
+        zs.append(z)
+        r, az, el = cart2sph(x, y, z)
+        thetas.append(az)
+        phis.append(el)
+        print("Relighting ", i, "th  light position." )
+        start_t = time.time()
+        relighted_img = np.array((eng.get_dmd_interpolated_img(float(az), float(el))))
+        # cv2.imwrite("relighted_img.png",relighted_img)
+        print("Done relighting the ", i, "th  light position. Time taken: ", time.time()-start_t )
 
-images_mat = np.array(images)
-images_mat = np.reshape(images_mat, (len(x), h*w)) 
-matlab_img_mat = matlab.uint8(images_mat.tolist())
-print(np.array(matlab_img_mat).shape)
-print("*****")
-
-            
-nb_modes = 45
-lps.append(x)
-lps.append(y)
-lps.append(z)
-lps = np.array(lps)
-lps = np.reshape(lps, [len(x), 3])
-lps = matlab.double(lps.tolist())
-print("############")
-modal_basis, normal_elt, Up, dmd_coeffs = eng.get_dmd_coeffs(matlab_img_mat, lps, nb_modes, nargout=4)
-
-relighted_img = eng.get_interpolated_img(lps[10], modal_basis,  nb_modes, normal_elt, Up, dmd_coeffs, h, w)
-
-test_dir = lps[2]
-
-
-
-print("???????")

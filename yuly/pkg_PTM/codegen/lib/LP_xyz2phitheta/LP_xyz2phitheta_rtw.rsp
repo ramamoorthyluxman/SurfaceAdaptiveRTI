@@ -1,6 +1,0 @@
-LP_xyz2phitheta.obj
-LP_xyz2phitheta_initialize.obj
-LP_xyz2phitheta_terminate.obj
-rtGetInf.obj
-rtGetNaN.obj
-rt_nonfinite.obj
