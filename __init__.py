@@ -27,6 +27,7 @@ from random import sample
 import bpy
 import numpy as np
 import math
+import time
 import cv2
 import numpy as np
 from mathutils import Vector
@@ -47,14 +48,20 @@ from bpy.types import (Panel,
                        )
 
 
-
 #################################### Global vars { ################################
 updated_lps = []
 #################################### Global vars } ################################
 
 #################################### Helpers { ####################################
 
-def cart2sph(x, y, z):
+# def cart2sph(x, y, z):
+def cart2sph(*args):
+    x = args[0]
+    y = args[1]
+    z = 1.0
+    if len(args)>2:
+        z = args[2]
+    print(x,",",y,",",z)
     hxy = np.hypot(x, y)
     r = np.hypot(hxy, z)
     el = np.arctan2(z, hxy)
@@ -99,13 +106,13 @@ def read_lp_file(file_path, dome_radius):
         r, long, lat = cart2sph(x,y,z)
         r = dome_radius
         x, y, z = sph2cart(long,lat,r)
-        light_positions.append((x,y,z))
+        light_positions.append((float(x),float(y),float(z)))
     
     return light_positions   
 
 ############################ Generate n evenly spaced hemispherical points { ##################################
 
-def generate_n_evenly_spaced_hemispherical_points(samples = 50):
+def generate_n_evenly_spaced_hemispherical_points(samples = 45):
     samples = 2*samples
     phi = math.pi * (3. - math.sqrt(5.))  # golden angle in radians
     cartesian_points = []
@@ -120,7 +127,7 @@ def generate_n_evenly_spaced_hemispherical_points(samples = 50):
         # convert the angles to be in the range 0 to 2 pi
         az = (az + np.pi) % (2 * np.pi) - np.pi
         el = (el + np.pi) % (2 * np.pi) - np.pi
-        polar_points.append((az,el))
+        polar_points.append((float(az),float(el)))
         cartesian_points.append((x, y, z))            
         
     # plot.figure().add_subplot(111, projection='3d').scatter([p[0] for p in cartesian_points], [p[1] for p in cartesian_points], [p[2] for p in cartesian_points]);    
@@ -170,13 +177,13 @@ class Nblp:
             
     def __init__(self):
         iteration_nb = len(self.iterations)
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=40, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)        
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=45, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)        
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
     def dense_acquisition(self):   
         iteration_nb = len(self.iterations)     
-        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=100, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)
+        lps_polar, lps_cartesian = self.generate_homogenous_points_along_theta(n=45, dome_radius=1, phi=math.radians(45.0), iteration_nb=iteration_nb)
         step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
         self.iterations.append(step)
 
@@ -233,12 +240,12 @@ class Nblp:
         with open(path, 'w') as file:
             iterations = []
             for i in range(0, len(self.iterations)):
-                iteration = [{'iteration nb': i},
+                iteration = {{'iteration nb': i},
                              {'lps_polar': self.iterations[i].lps_polar},
                              {'nb_images': self.iterations[i].nb_images},
                              {'lps_cartesian':self.iterations[i].lps_cartesian},
                              {'filenames_subtext': self.iterations[i].filenames_subtext},
-                             {'iteration_nb':self.iterations[i].iteration_nb}]
+                             {'iteration_nb':self.iterations[i].iteration_nb}}
 
                 iterations.append(iteration)
             yaml.dump(iterations, file)    
@@ -250,13 +257,16 @@ class Nblp:
 class Nblp_2:
     iterations = []
     class iteration:
-        def __init__(self, lps_polar, lps_cartesian, iteration_nb):
+        def __init__(self, lps_polar, lps_cartesian, iteration_nb, context):
             self.lps_polar = lps_polar
             self.nb_images = len(lps_polar)
             self.lps_cartesian = lps_cartesian
             self.filenames_subtext = "nblp_iteration_"+str(iteration_nb)+"_"
             self.iteration_nb = iteration_nb
-            self.loss = 1.0
+            self.context = context
+            self.generate_file_names()
+            # self.loss = 1.0
+            
 
         def plot_lps(self):
             fig, ax = plot.subplots(subplot_kw={'projection': 'polar'})
@@ -276,15 +286,99 @@ class Nblp_2:
                 theta=str(math.floor(100*math.degrees(self.lps_polar[i][0]))/100)
                 phi=str(math.floor(100*math.degrees(self.lps_polar[i][1]))/100)
                 old_name = path+"nblp_iteration_"+str(self.iteration_nb)+"_"+str(i+1)+".png"
-                new_name = path+"nblp_iteration_"+str(self.iteration_nb)+"_"+str(i+1)+"_theta_" + theta + "_phi_" + phi + ".png"
-                os.rename(old_name, new_name)                
+                new_name = path+self.file_names[i]                
+                os.rename(old_name, new_name)
+
+        def generate_lp_file(self, file_path):
+            data = str(self.nb_images)
+            for i in range(0, self.nb_images):
+                data = data+"\n"+self.file_names[i]+"\t"+str(self.lps_cartesian[i][0])+"\t"+str(self.lps_cartesian[i][1])+"\t"+str(self.lps_cartesian[i][2])
+            with open(file_path, 'w') as f:
+                f.write(data)
+
+        def calculate_entropies(self,iteration_nb, file_path):
+            print("Calculating entropies")
+            img_path = file_path+"\\..\\"+self.file_names[0]
+            img_sum = cv2.imread(img_path)
+            for i in range(0, self.nb_images):
+                img_path = file_path+"\\..\\"+self.file_names[i]
+                print(img_path)
+                img = cv2.imread(img_path)
+                img_sum = cv2.addWeighted(img_sum,0.5,img,0.5,0)            
+
+            for i in range(0, self.nb_images):
+                img_path = file_path+"\\..\\"+self.file_names[i]
+                img_diff = cv2.absdiff(img_sum,cv2.imread(img_path))
+                normalized_img_diff = np.zeros(img_diff.shape)
+                # min_val = img_diff[..., 0].min()
+                # max_val = img_diff[..., 0].max()
+                min_val = img_diff.min()
+                max_val = img_diff.max()
+                normalized_img_diff = img_diff * (255/(max_val-min_val))
+                # cv2.normalize(img_diff, normalized_img_diff, min_val, max_val, cv2.NORM_MINMAX)
+                if not os.path.exists(file_path):
+                    os.makedirs(file_path)
+                    cv2.imwrite(file_path+self.file_names[i], img_diff)
+                    cv2.imwrite(file_path+self.file_names[i].split(".")[0]+"_normalized.png", normalized_img_diff)
+
+        def generate_file_names(self):
+            self.file_names = []
+            for i in range(0, self.nb_images):
+                theta=str(math.floor(100*math.degrees(self.lps_polar[i][0]))/100)
+                phi=str(math.floor(100*math.degrees(self.lps_polar[i][1]))/100)
+                self.file_names.append("nblp_iteration_"+str(self.iteration_nb)+"_"+str(i+1)+"_theta_" + theta + "_phi_" + phi + ".png")
+
+        def execute_acq(self):
+            global updated_lps
+            updated_lps = self.lps_cartesian
+            bpy.context.scene.render.filepath = self.context.scene.acquisition_panel.output_path+self.filenames_subtext+"#.png"
+            bpy.ops.rti.create_lights()
+            bpy.context.scene.frame_end = len(self.context.scene.light_panel.light_list)
+            bpy.ops.rti.set_animation()
+            bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
+            bpy.ops.render.play_rendered_anim()         
+            self.plot_lps().savefig(self.context.scene.acquisition_panel.output_path+"iteration_"+str(self.iteration_nb)+"_"+str(self.nb_images)+".png")
+            self.rename_files(self.context.scene.acquisition_panel.output_path)
+            self.generate_lp_file(file_path=self.context.scene.acquisition_panel.output_path+"iteration_"+str(self.iteration_nb)+".lp")
+            self.calculate_entropies(self.iteration_nb,self.context.scene.acquisition_panel.output_path+"\\entropies\\") 
+
             
-    def __init__(self):
-        iteration_nb = len(self.iterations)
-        lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=50)
-        print(len(lps_polar))
-        step = self.iteration(lps_polar, lps_cartesian, iteration_nb)
-        self.iterations.append(step)
+    def __init__(self, context):
+        path = context.scene.acquisition_panel.output_path
+        self.context = context
+        if not os.path.exists(path +"log.yaml"):
+            lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=55)
+            step = self.iteration(lps_polar=lps_polar, lps_cartesian=lps_cartesian, iteration_nb=0, context=context)
+            step.execute_acq()
+            self.iterations.append(step)
+        else:
+            print(path + "log.yaml")
+            data = None
+            with open(path + "log.yaml") as f:
+                data = yaml.load(f.read(), yaml.loader.Loader)
+                
+            for i in range(0, len(data)):
+                step = self.iteration(data[i]['lps_polar'], data[i]['lps_cartesian'], len(data)-1, context=context)
+                self.iterations.append(step)
+
+            if os.path.exists(path + "next_iteration.lp"):
+                lps_cartesian = read_lp_file(path + "next_iteration.lp", 1.0)
+                print(len(lps_cartesian))
+                lps_polar = []
+                for i in range(0, len(lps_cartesian)):
+                    r, az, el = cart2sph(lps_cartesian[i][0], lps_cartesian[i][1], lps_cartesian[i][2])
+                    lps_polar.append((float(az),float(el)))
+                step = self.iteration(lps_polar=lps_polar, lps_cartesian=lps_cartesian, iteration_nb=len(data), context=context)
+                step.execute_acq()
+                self.iterations.append(step)
+
+        # for i in range(0,len(self.iterations)):
+
+        #     data = str(self.nb_images)
+        #     for i in range(0, self.nb_images):
+        #         data = data+"\n"+self.file_names[i]+"\t"+str(self.lps_cartesian[i][0])+"\t"+str(self.lps_cartesian[i][1])+"\t"+str(self.lps_cartesian[i][2])
+        #     with open(file_path, 'w') as f:
+        #         f.write(data)
 
     def dense_acquisition(self):   
         iteration_nb = len(self.iterations)     
@@ -293,50 +387,20 @@ class Nblp_2:
         self.iterations.append(step)
 
     
-    def calculate_entropies(self,iteration_nb, file_path):
-        print("Calculating entropies")
-        img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(1)+".png"
-        img_sum = cv2.imread(img_path)
-        for i in range(0, self.iterations[iteration_nb].nb_images):
-            img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
-            print(img_path)
-            img = cv2.imread(img_path)
-            img_sum = cv2.addWeighted(img_sum,0.5,img,0.5,0)
-        
-
-        for i in range(0, self.iterations[iteration_nb].nb_images):
-            img_path = file_path+"\\..\\"+self.iterations[iteration_nb].filenames_subtext+str(i+1)+".png"
-            img_diff = cv2.absdiff(img_sum,cv2.imread(img_path))
-            normalized_img_diff = np.zeros(img_diff.shape)
-            # min_val = img_diff[..., 0].min()
-            # max_val = img_diff[..., 0].max()
-            min_val = img_diff.min()
-            max_val = img_diff.max()
-            normalized_img_diff = img_diff * (255/(max_val-min_val))
-            # cv2.normalize(img_diff, normalized_img_diff, min_val, max_val, cv2.NORM_MINMAX)
-            if not os.path.exists(file_path):
-                os.makedirs(file_path)
-                cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+".png", img_diff)
-                cv2.imwrite(file_path+self.iterations[iteration_nb].filenames_subtext+str(i)+"_normalized.png", normalized_img_diff)
-
-    def generate_lp_file(self, iteration_nb, file_path):
-        data = str(self.iterations[iteration_nb].nb_images)
-        for i in range(0, self.iterations[iteration_nb].nb_images):
-            step =self.iterations[iteration_nb] 
-            data = data+"\n"+step.filenames_subtext+str(i+1)+".png\t"+str(step.lps_cartesian[i][0])+"\t"+str(step.lps_cartesian[i][1])+"\t"+str(step.lps_cartesian[i][2])
-        with open(file_path, 'w') as f:
-            f.write(data)
+    
+    
 
     def write_log(self, path):
+        open(path, "w").close()
         with open(path, 'w') as file:
             iterations = []
             for i in range(0, len(self.iterations)):
-                iteration = [{'iteration nb': i},
-                             {'lps_polar': self.iterations[i].lps_polar},
-                             {'nb_images': self.iterations[i].nb_images},
-                             {'lps_cartesian':self.iterations[i].lps_cartesian},
-                             {'filenames_subtext': self.iterations[i].filenames_subtext},
-                             {'iteration_nb':self.iterations[i].iteration_nb}]
+                iteration = {'lps_polar': list(self.iterations[i].lps_polar),
+                             'nb_images': self.iterations[i].nb_images,
+                             'lps_cartesian': list(self.iterations[i].lps_cartesian),
+                             'filenames_subtext': self.iterations[i].filenames_subtext,
+                             'iteration_nb':self.iterations[i].iteration_nb,
+                             'file_names': self.iterations[i].file_names}
 
                 iterations.append(iteration)
             yaml.dump(iterations, file) 
@@ -766,18 +830,18 @@ class acquire(Operator):
             
         else:
             print("Executing NBLP")
-            nblp = Nblp_2()
+            nblp = Nblp_2(context=context)
             
-            updated_lps = nblp.iterations[0].lps_cartesian 
-            nblp.generate_lp_file(iteration_nb=0, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
-            bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+nblp.iterations[0].filenames_subtext+"#.png"
-            bpy.ops.rti.create_lights()
-            bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
-            bpy.ops.rti.set_animation()
-            bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
-            bpy.ops.render.play_rendered_anim() 
-            nblp.iterations[0].plot_lps().savefig(context.scene.acquisition_panel.output_path+"30.png")
-            nblp.iterations[0].rename_files(context.scene.acquisition_panel.output_path)
+            # updated_lps = nblp.iterations[0].lps_cartesian 
+            # nblp.generate_lp_file(iteration_nb=0, file_path=context.scene.acquisition_panel.output_path+"iteration_"+str(len(nblp.iterations)-1)+".lp")
+            # bpy.context.scene.render.filepath = context.scene.acquisition_panel.output_path+nblp.iterations[0].filenames_subtext+"#.png"
+            # bpy.ops.rti.create_lights()
+            # bpy.context.scene.frame_end = len(context.scene.light_panel.light_list)
+            # bpy.ops.rti.set_animation()
+            # bpy.ops.render.render(animation=True, use_viewport = True, write_still=True)
+            # bpy.ops.render.play_rendered_anim() 
+            # nblp.iterations[0].plot_lps().savefig(context.scene.acquisition_panel.output_path+"30.png")
+            # nblp.iterations[0].rename_files(context.scene.acquisition_panel.output_path)
             # nblp.calculate_entropies(len(nblp.iterations)-1,context.scene.acquisition_panel.output_path+"\\entropies\\")
 
             # nblp.dense_acquisition()
