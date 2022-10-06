@@ -1,0 +1,13 @@
+function [Maps] = map_ptmCoefficients(Maps, Data, LP)
+
+    LP = process_normalizeLostDynamic([LP.X LP.Y LP.Z]')';
+    
+    l = cat(2, power(LP(:,1), 2), power(LP(2), 2), LP(1) .* LP(2), LP(1), LP(2), ones(size(LP(1))));
+    
+    Maps.('PTM').Coefficients = l\Data;
+    
+    l_size = size(l)
+    data_size size(Data)
+    
+end
+
