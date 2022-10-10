@@ -26,7 +26,7 @@ from scipy.signal import argrelextrema
 import copy
 # conda install pandas
 import plotly.express as px
-from sympy import interpolate
+from sympy import interpolate, sign
 import matlab.engine
 
 ##########################################################################################
@@ -41,8 +41,9 @@ Data_interpolation_sample_size = 200
 Gradient_ascent_step_size = 0
 Gradient_ascent_found_minimum = 99999
 Gradient_ascent_found_maximum = 0
-Theta_signal_validation_gradient_threshold = 10
-Desired_validation_theta_acq_size = 20
+Theta_signal_validation_gradient_threshold = 12
+Theta_signal_validation_difference_threshold = 6
+Desired_validation_theta_acq_size = 3
 
 ##########################################################################################
 class light_position():
@@ -192,9 +193,9 @@ class image:
             if 'rect' in kwargs.keys():
                 self.roi_rect = kwargs.get("rect")                
             if 'w_from_center' in kwargs.keys() and 'h_from_center' in kwargs.keys():
-                self.roi_rect = {'x':int(self.w/2) - kwargs.get("w_from_center"), 
+                self.roi_rect = {'x':int(self.w/2) - int(kwargs.get("w_from_center")/2), 
                                 'w':kwargs.get("w_from_center"), 
-                                'y':int(self.h/2) - kwargs.get("h_from_center"), 
+                                'y':int(self.h/2) - int(kwargs.get("h_from_center")/2), 
                                 'h':kwargs.get("h_from_center")}                
             img = self.img_mat[self.roi_rect['y']:self.roi_rect['y']+self.roi_rect['h'], + self.roi_rect['x']:self.roi_rect['x']+self.roi_rect['w']]
             self.roi_img = image(img_mat=img)
@@ -418,13 +419,13 @@ class dense_acquisition_measurements:
         self.find_best_light_positions_in_theta_space()
         # self.find_best_light_positions()
 
-    def plot_pixel_intensities_2d(self, signal, title):
-        go_fig = go.Figure(data=[go.Scatterpolar(r=[lp.el_degrees for lp in self.dense_acq.lps.lps], theta=[lp.az_degrees for lp in self.dense_acq.lps.lps], mode = 'markers', marker=dict(color=signal, showscale=True) )])
+    def plot_pixel_intensities_2d(self, lps, signal, title):
+        go_fig = go.Figure(data=[go.Scatterpolar(r=[lp.el_degrees for lp in lps], theta=[lp.az_degrees for lp in lps], mode = 'markers', marker=dict(color=signal, showscale=True) )])
         go_fig.update_layout(title=title, autosize=True)
         go_fig.write_html(self.save_metrics_path+"\\"+title+"_projected.html")
 
-    def radial_polar_plot_2d(self, thetas, phis, signal, title):
-        go_fig = go.Figure(data=[go.Scatterpolar(r=phis, theta=thetas, mode = 'markers', marker=dict(color=signal, showscale=True) )])
+    def radial_polar_plot_2d(self, lps, signal, title):
+        go_fig = go.Figure(data=[go.Scatterpolar(r=signal, theta=[lp.az_degrees for lp in lps], mode = 'lines'), go.Scatterpolar(r=signal, theta=[lp.az_degrees for lp in lps], mode = 'markers', marker=dict(color=signal, showscale=True))])
         go_fig.update_layout(title=title, autosize=True)
         go_fig.write_html(self.save_metrics_path+"\\"+title+"_projected.html")
 
@@ -442,35 +443,40 @@ class dense_acquisition_measurements:
         return x_grid, y_grid, z_grid
 
     def find_best_light_positions_in_theta_space(self):
-        self.theta_idx_step_size = len(self.xs)/Desired_validation_theta_acq_size
+        self.theta_idx_step_size = int(len(self.xs)/Desired_validation_theta_acq_size)
+        self.sorted_theta_indices = np.argsort(self.azimuths)
         for i in range(0, len(self.pixels_list_1d)):
             i_pixel_intensities = [intensity[i] for intensity in self.pixels_intensities_matrix]
-            self.plot_pixel_intensities_2d(signal=i_pixel_intensities, title="Pixl_intensities_2D_("+str(self.pixels_indices_2d[i])+")")
+            self.plot_pixel_intensities_2d(lps=self.dense_acq.lps.lps, signal=i_pixel_intensities, title="Pixl_intensities_2D_("+str(self.pixels_indices_2d[i])+")")
+            self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal = i_pixel_intensities, title="Pixl_intensities_radial_2D_("+str(self.pixels_indices_2d[i])+")")
             x_grid, y_grid, z_grid = self.interpolate_intensities(i_pixel_intensities)
             self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=i_pixel_intensities,  title="Pixl_intensities_3D_("+str(self.pixels_indices_2d[i])+")" )
             nblp_points = []
-            current_theta_idx = 0
-            nblp_points.append(current_theta_idx)
-            while current_theta_idx<len(self.azimuths)-1:
-                print("e: ", current_theta_idx)
-                print("f: ", len(self.azimuths)-1)
-                current_theta_idx = self.next_theta(current_theta_idx=current_theta_idx, signal=i_pixel_intensities)
-                nblp_points.append(current_theta_idx)
-            signal = [i_pixel_intensities[nblp_points[i]] for i in range(0,len(nblp_points))]
-            phis = [self.elevations[nblp_points[i]] for i in range(0,len(nblp_points))]
-            thetas = [self.azimuths[nblp_points[i]] for i in range(0,len(nblp_points))]
-            self.radial_polar_plot_2d(thetas=thetas,phis=phis,signal=signal,title="theoretical_nblps_("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
+            nblp_points.append(self.sorted_theta_indices[0])
+            current_theta_idx = 1
+            nblp_points.append(self.sorted_theta_indices[current_theta_idx])
+            while current_theta_idx<len(i_pixel_intensities)-1:
+                current_theta_idx = self.next_theta(current_theta_idx=current_theta_idx, signal=i_pixel_intensities)                
+                nblp_points.append(self.sorted_theta_indices[current_theta_idx])
+            nblp_signal = [i_pixel_intensities[nblp_points[i]] for i in range(0,len(nblp_points))]
+            nblps = [self.dense_acq.lps.lps[nblp_points[i]] for i in range(0,len(nblp_points))]
+            self.plot_pixel_intensities_2d(lps=nblps,signal=nblp_signal,title="theoretical_nblps_("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
+            self.radial_polar_plot_2d(lps=nblps, signal=nblp_signal,title="theoretical_nblps_radial_plot("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
 
     def next_theta(self,current_theta_idx, signal):
-        next_theta_idx = int(current_theta_idx+self.theta_idx_step_size)
-        if next_theta_idx>len(signal)-1:
-            next_theta_idx = len(signal)-1
-        while(abs(signal[next_theta_idx]-signal[current_theta_idx])>Theta_signal_validation_gradient_threshold and current_theta_idx!=next_theta_idx-1):
-            print("a: ",(abs(signal[next_theta_idx]-signal[current_theta_idx])))
-            print("b: ",Theta_signal_validation_gradient_threshold )
-            print("c: ", current_theta_idx)
-            print("d: ", next_theta_idx)
-            next_theta_idx = next_theta_idx-1
+        next_theta_idx = min(current_theta_idx+self.theta_idx_step_size,len(signal)-1)
+        if current_theta_idx+1 < next_theta_idx:
+            next_theta_idx1 = next_theta_idx
+            next_theta_idx2 = next_theta_idx
+            gradients = np.gradient([int(signal[self.sorted_theta_indices[i]]) for i in range(current_theta_idx+1, next_theta_idx+1)] )
+            differences = np.array([int(signal[self.sorted_theta_indices[i]])- int(signal[self.sorted_theta_indices[current_theta_idx]]) for i in range(current_theta_idx+1, next_theta_idx+1)])
+            gradients_cond = gradients[abs(gradients)>Theta_signal_validation_gradient_threshold]
+            if len(gradients_cond) > 0:                
+                next_theta_idx1 = current_theta_idx+(np.where(gradients==gradients_cond[0])[0][0]+1)
+            differences_cond = differences[abs(differences)>Theta_signal_validation_difference_threshold]
+            if len(differences_cond) > 0:
+                next_theta_idx2 = current_theta_idx+(np.where(differences==differences_cond[0])[0][0]+1)
+            next_theta_idx = min(next_theta_idx1, next_theta_idx2)
         return next_theta_idx
 
     def find_best_light_positions_in_u_v_space(self):
@@ -504,12 +510,19 @@ class dense_acquisition_measurements:
 
 
 
-data = {'dir':os.path.abspath(r'E:\acquisitions\nblp_v2\rust_coarse_dense'), 'lp_file_name': "iteration_0.lp"}
-data = {'dir':os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_20221005_144547_dense_ring'), 'lp_file_name': "acquisition.lp"}
-k = acquisition(data=data)
+# data = {'dir':os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\rust_coarse\theta_gradient\dense'), 'lp_file_name': "iteration_0.lp"}
+# data = {'dir':os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_20221005_144547_dense_ring'), 'lp_file_name': "acquisition.lp"}
+# k = acquisition(data=data)
+# roi = {'w_from_center':1142, 'h_from_center':1000}
+new_acq = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_20221005_144547_dense_ring\roi_acq'),  'lp_file_name': "acquisition.lp"}
+# k.copy_acquisition(new_acq, roi=roi)
+# k = new_acq
+
+k = acquisition(data=new_acq)
 
 # pixels = [(10,15),(100,200), (400,500)]
-pixels = [(1504,2056)]
+pixels = [(500,500)]
+# pixels = [(100,100)]
 
 # pixels = [100,1,700, 1800]
 l = dense_acquisition_measurements(dense_acq = k,pixels_indices_2d= pixels)
