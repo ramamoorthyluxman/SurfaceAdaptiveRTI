@@ -32,8 +32,8 @@ import matlab.engine
 ##########################################################################################
 # Params
 Output_figures_loc = os.path.abspath(r"D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_Homogeneous_20220926_205820_coin\dmd\dmd\figures")
-Min_lp_distance_threshold = 0.008
-Search_radius_for_calc_point_densities = 0.02
+Min_lp_distance_threshold = 0.02
+Search_radius_for_calc_point_densities = 0.008
 Point_density_threshold = 3
 New_lp_file_name = "acquisition.lp"
 Matlab_functions_dir = "C:\\Users\\Ramamoorthy_Luxman\\OneDrive - Université de Bourgogne\\imvia\\work\\nblp\\SurfaceAdaptiveRTI\\matlab_functions\\"
@@ -41,8 +41,8 @@ Data_interpolation_sample_size = 200
 Gradient_ascent_step_size = 0
 Gradient_ascent_found_minimum = 99999
 Gradient_ascent_found_maximum = 0
-Theta_signal_validation_gradient_threshold = 12
-Theta_signal_validation_difference_threshold = 6
+Theta_signal_validation_gradient_threshold = 6
+Theta_signal_validation_difference_threshold = 4
 Desired_validation_theta_acq_size = 3
 
 ##########################################################################################
@@ -137,33 +137,31 @@ class light_positions():
         file_name = os.path.basename(self.lp_file_path).split(".lp")[0]        
         go_fig.write_html(Output_figures_loc+"\\"+file_name+"_projected.html")
 
-    class unqiue_light_positions:
-        def __init__(self,lps):
-            self.data = [[lp.x,lp.y,lp.z] for lp in lps ]            
-        
-        def get_unqiue_lps(self):
+    class unique_light_positions:
+        def __init__(self, lps):
+            self.data = [[lp.x,lp.y,lp.z] for lp in lps ]          
+        def get_unique_lps(self):
             result = []
+            data_filtered = copy.deepcopy(self.data)
             for element in self.data:
-                if all(self.condition(element,other) for other in result):
-                    result.append(element)
+                if element in data_filtered:
+                    result.append(light_position(x=element[0], y=element[1], z=element[2]))
+                    elements_to_remove = [self.condition(element,other) for other in data_filtered]
+                    data_filtered = [d for (d, remove) in zip(data_filtered, elements_to_remove) if not remove]                
             return result
-
         def condition(self,xs,ys):    
-            return sum((x-y)*(x-y) for x,y in zip(xs,ys)) > Min_lp_distance_threshold*Min_lp_distance_threshold
+            return sum((x-y)*(x-y) for x,y in zip(xs,ys)) < Min_lp_distance_threshold*Min_lp_distance_threshold 
 
     class point_densities:
         def __init__(self,lps):
             self.data = [[lp.x,lp.y,lp.z] for lp in lps ]
-            
-        
         def get_densities(self):
             densities = []
             for element in self.data:
                 within_search_radius = np.array([self.condition(element,other) for other in self.data])
                 densities.append(len(within_search_radius[within_search_radius==True])-1)
             return densities
-
-        def condition(self,xs,ys):    
+        def condition(self,xs,ys):
             return sum((x-y)*(x-y) for x,y in zip(xs,ys)) < Search_radius_for_calc_point_densities * Search_radius_for_calc_point_densities
 
 ##########################################################################################
@@ -233,6 +231,9 @@ class acquisition:
             self.__dict__.update(default_values)
         else:
             raise ValueError("Invalid arguments in constructor:{}".format(kwargs))
+    
+    def get_acquisition_matrix(self):
+        return (np.array([img.img_vect for img in self.get_images()]).T).astype(int)
 
     def get_images(self):
         return ([image(img_path=self.data['dir']+"\\"+img_file_name) for img_file_name in self.lps.img_file_names])
@@ -395,6 +396,7 @@ class dense_acquisition_measurements:
             self.__dict__.update(kwargs) 
 
         self.h,self.w = self.dense_acq.get_images()[0].img_mat.shape
+        self.pixels_list_1d = np.arange(0, self.h*self.w)
         self.xs = [lp.x for lp in self.dense_acq.lps.lps]
         self.ys = [lp.y for lp in self.dense_acq.lps.lps]
         self.azimuths = [lp.az_degrees for lp in self.dense_acq.lps.lps]
@@ -415,8 +417,12 @@ class dense_acquisition_measurements:
             raise ValueError("Invalid arguments in constructor:{}".format(rejected_keys))
 
     def get_dense_acquisition_measurements(self):
-        self.pixels_intensities_matrix = [list(map(img.img_vect.__getitem__, self.pixels_list_1d)) for img in self.dense_acq.get_images()]
+        # self.find_best_light_positions_in_theta_space()
+        self.pixels_intensities_matrix = np.array([list(map(img.img_vect.__getitem__, self.pixels_list_1d)) for img in self.dense_acq.get_images()]).T
         self.find_best_light_positions_in_theta_space()
+        print(len(self.azimuths))
+        print(np.array(self.pixels_intensities_matrix).T.shape)
+        # self.find_best_light_positions_in_theta_space_single_pxl()
         # self.find_best_light_positions()
 
     def plot_pixel_intensities_2d(self, lps, signal, title):
@@ -445,10 +451,63 @@ class dense_acquisition_measurements:
     def find_best_light_positions_in_theta_space(self):
         self.theta_idx_step_size = int(len(self.xs)/Desired_validation_theta_acq_size)
         self.sorted_theta_indices = np.argsort(self.azimuths)
+        # print("sorted indices: ", self.sorted_theta_indices)
+        self.acq_matrix = copy.deepcopy(self.pixels_intensities_matrix)[:,self.sorted_theta_indices]
+        # self.acq_matrix = copy.deepcopy(self.dense_acq.get_acquisition_matrix())[:,self.sorted_theta_indices]
+        # print(self.acq_matrix)
+        nblps_indices = []
+        nblps_indices.append(self.sorted_theta_indices[0])
+        current_theta_idx = 1
+        nblps_indices.append(self.sorted_theta_indices[current_theta_idx])
+        while current_theta_idx<len(self.azimuths)-1:
+            current_theta_idx = self.next_theta(current_theta_idx=current_theta_idx)               
+            nblps_indices.append(self.sorted_theta_indices[current_theta_idx])
+            # print("i: ", self.sorted_theta_indices[current_theta_idx])
+        nblps = light_positions(lps=[self.dense_acq.lps.lps[nblps_indices[i]] for i in range(0,len(nblps_indices))])
+        self.plot_pixel_intensities_2d(lps=nblps.lps,signal=self.elevations, title="theoretical_global_nblps_nb_pts-"+ str(len(nblps.lps)))
+        nblps_filtered = nblps.unique_light_positions(nblps.lps).get_unique_lps()
+        self.plot_pixel_intensities_2d(lps=nblps_filtered,signal=self.elevations, title="theoretical_global_nblps_filtered_nb_pts-"+ str(len(nblps_filtered)))
+    
+    def next_theta(self, current_theta_idx):
+        next_theta_idx = min(current_theta_idx+self.theta_idx_step_size,len(self.azimuths)-1)
+        if current_theta_idx+1 < next_theta_idx:
+            gradient_nblp = next_theta_idx
+            differences_nblp = next_theta_idx    
+            # print("a", current_theta_idx)        
+            # print("b", next_theta_idx)
+            # print(self.acq_matrix.shape)
+            gradients = np.gradient(self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1], axis=1)
+            
+            differences = self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1] - self.acq_matrix[:,current_theta_idx,None]
+            # print("f: ", self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1].shape)
+            # print("g: ", next_theta_idx-current_theta_idx)
+            gradient_nblps = np.argwhere(abs(gradients.flatten())>Theta_signal_validation_gradient_threshold).flatten()%(next_theta_idx-current_theta_idx)
+            
+            # print('p: ', gradients.flatten())
+            if len(gradient_nblps)>0:
+                # print("u: ", np.where(gradients>Theta_signal_validation_gradient_threshold)[0][min(np.where(gradients>Theta_signal_validation_gradient_threshold)[1])],", ",min(np.where(gradients>Theta_signal_validation_gradient_threshold)[1]))
+                # print("ab: ", gradients[abs(gradients)>Theta_signal_validation_gradient_threshold])
+                gradient_nblp = current_theta_idx+min(gradient_nblps)+1
+                # print("k: ", gradient_nblps.shape)
+            differences_nblps = np.argwhere(abs(differences.flatten())>Theta_signal_validation_difference_threshold).flatten()%(next_theta_idx-current_theta_idx)
+            
+            if len(differences_nblps)>0:
+                # print("cd: ", differences[abs(differences)>Theta_signal_validation_gradient_threshold])
+                differences_nblp = current_theta_idx+min(differences_nblps)+1
+            next_theta_idx = min(gradient_nblp, differences_nblp)   
+            # print("c: ",gradient_nblp)
+            # print("d: ", differences_nblp)
+            # print("e: ", next_theta_idx)
+        return next_theta_idx
+            
+
+    def find_best_light_positions_in_theta_space_single_pxl(self):
+        self.theta_idx_step_size = int(len(self.xs)/Desired_validation_theta_acq_size)
+        self.sorted_theta_indices = np.argsort(self.azimuths)
         for i in range(0, len(self.pixels_list_1d)):
             i_pixel_intensities = [intensity[i] for intensity in self.pixels_intensities_matrix]
             self.plot_pixel_intensities_2d(lps=self.dense_acq.lps.lps, signal=i_pixel_intensities, title="Pixl_intensities_2D_("+str(self.pixels_indices_2d[i])+")")
-            self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal = i_pixel_intensities, title="Pixl_intensities_radial_2D_("+str(self.pixels_indices_2d[i])+")")
+            self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal = i_pixel_intensities, title="Pixl_intensities_radial_2D_("+str(self.pixels_indices_2d[i])+")")            
             x_grid, y_grid, z_grid = self.interpolate_intensities(i_pixel_intensities)
             self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=i_pixel_intensities,  title="Pixl_intensities_3D_("+str(self.pixels_indices_2d[i])+")" )
             nblp_points = []
@@ -456,14 +515,14 @@ class dense_acquisition_measurements:
             current_theta_idx = 1
             nblp_points.append(self.sorted_theta_indices[current_theta_idx])
             while current_theta_idx<len(i_pixel_intensities)-1:
-                current_theta_idx = self.next_theta(current_theta_idx=current_theta_idx, signal=i_pixel_intensities)                
+                current_theta_idx = self.next_theta_single_pxl(current_theta_idx=current_theta_idx, signal=i_pixel_intensities)                
                 nblp_points.append(self.sorted_theta_indices[current_theta_idx])
             nblp_signal = [i_pixel_intensities[nblp_points[i]] for i in range(0,len(nblp_points))]
             nblps = [self.dense_acq.lps.lps[nblp_points[i]] for i in range(0,len(nblp_points))]
             self.plot_pixel_intensities_2d(lps=nblps,signal=nblp_signal,title="theoretical_nblps_("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
             self.radial_polar_plot_2d(lps=nblps, signal=nblp_signal,title="theoretical_nblps_radial_plot("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
 
-    def next_theta(self,current_theta_idx, signal):
+    def next_theta_single_pxl(self,current_theta_idx, signal):
         next_theta_idx = min(current_theta_idx+self.theta_idx_step_size,len(signal)-1)
         if current_theta_idx+1 < next_theta_idx:
             next_theta_idx1 = next_theta_idx
@@ -515,6 +574,7 @@ class dense_acquisition_measurements:
 # k = acquisition(data=data)
 # roi = {'w_from_center':1142, 'h_from_center':1000}
 new_acq = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_20221005_144547_dense_ring\roi_acq'),  'lp_file_name': "acquisition.lp"}
+new_acq = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\rust_coarse\theta_gradient\dense'),  'lp_file_name': "iteration_0.lp"}
 # k.copy_acquisition(new_acq, roi=roi)
 # k = new_acq
 
