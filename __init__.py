@@ -138,7 +138,7 @@ def generate_n_evenly_spaced_hemispherical_points(samples = 45):
 
 ############################ Generate n evenly spaced hemispherical points } ##################################
 
-def generate_homogenous_points_along_theta(samples = 45, dome_radius=1.0, phi=55.0):
+def generate_homogenous_points_along_theta(samples = 30, dome_radius=1.0, phi=60.0):
         light_positions_cartesian = []
         light_positions_polar = []
         dome_radius = dome_radius
@@ -363,8 +363,8 @@ class Nblp_2:
         path = context.scene.acquisition_panel.output_path
         self.context = context
         if not os.path.exists(path +"log.yaml"):
-            lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=1000)
-            # lps_polar, lps_cartesian = generate_homogenous_points_along_theta(samples=30)
+            # lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=1000)
+            lps_polar, lps_cartesian = generate_homogenous_points_along_theta(samples=400)
             step = self.iteration(lps_polar=lps_polar, lps_cartesian=lps_cartesian, iteration_nb=0, context=context)
             step.execute_acq()
             self.iterations.append(step)

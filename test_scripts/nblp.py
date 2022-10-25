@@ -16,7 +16,7 @@ from scipy.interpolate import griddata
 from matplotlib import cm
 from matplotlib.ticker import LinearLocator, FormatStrFormatter
 import math
-from numpy import inner, savetxt
+from numpy import inner, linspace, savetxt
 # conda install -c conda-forge dataclasses
 from dataclasses import dataclass
 from numpy.lib.stride_tricks import as_strided
@@ -27,12 +27,22 @@ import copy
 # conda install pandas
 import plotly.express as px
 from sympy import interpolate, sign
-import matlab.engine
+# import matlab.engine
+from scipy.fft import fft, fftfreq
+# conda install numexpr
+import numexpr as ne
+import plotly.figure_factory as ff
+import plotly.express as px
+import pandas as pd
+import base64
+import io 
+
+
 
 ##########################################################################################
 # Params
 Output_figures_loc = os.path.abspath(r"D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_Homogeneous_20220926_205820_coin\dmd\dmd\figures")
-Min_lp_distance_threshold = 0.02
+Min_lp_distance_threshold = 0.015
 Search_radius_for_calc_point_densities = 0.008
 Point_density_threshold = 3
 New_lp_file_name = "acquisition.lp"
@@ -41,9 +51,10 @@ Data_interpolation_sample_size = 200
 Gradient_ascent_step_size = 0
 Gradient_ascent_found_minimum = 99999
 Gradient_ascent_found_maximum = 0
-Theta_signal_validation_gradient_threshold = 6
-Theta_signal_validation_difference_threshold = 4
 Desired_validation_theta_acq_size = 3
+GRAD_CRITERION = 50
+DIFF_CRITERION = 120
+SAMPLE_FREQ_CRITERION = 180
 
 ##########################################################################################
 class light_position():
@@ -140,12 +151,14 @@ class light_positions():
     class unique_light_positions:
         def __init__(self, lps):
             self.data = [[lp.x,lp.y,lp.z] for lp in lps ]          
+            self.unique_element_indices = []            
         def get_unique_lps(self):
             result = []
             data_filtered = copy.deepcopy(self.data)
-            for element in self.data:
+            for idx, element in enumerate(self.data):
                 if element in data_filtered:
                     result.append(light_position(x=element[0], y=element[1], z=element[2]))
+                    self.unique_element_indices.append(idx)
                     elements_to_remove = [self.condition(element,other) for other in data_filtered]
                     data_filtered = [d for (d, remove) in zip(data_filtered, elements_to_remove) if not remove]                
             return result
@@ -317,7 +330,8 @@ class loss_function:
         self.acquisition = acquisition
 
     def get_model_fit_loss(self, model):
-        matlab_engine = matlab.engine.start_matlab()
+        # matlab_engine = matlab.engine.start_matlab()
+        matlab_engine = None
         for subdir, dirs, files in os.walk(Matlab_functions_dir):
             matlab_engine.addpath(subdir)
         org_images_mat = None
@@ -387,7 +401,8 @@ class validation:
         if rejected_keys:
             raise ValueError("Invalid arguments in constructor:{}".format(rejected_keys))
 
-class dense_acquisition_measurements:
+##########################################################################################
+class dense_ring_acquisition_measurements:
     def __init__(self, **kwargs):
         default_values = {'dense_acq':None, 'pixels_list_1d':None, 'pixels_mask_for_analysis':None,'pixels_indices_2d':None} 
         self.__dict__.update(default_values)
@@ -395,52 +410,67 @@ class dense_acquisition_measurements:
         if set(kwargs.keys()).issubset(allowed_args):
             self.__dict__.update(kwargs) 
 
-        self.h,self.w = self.dense_acq.get_images()[0].img_mat.shape
-        self.pixels_intensities_matrix = self.dense_acq.get_acquisition_matrix()
-        self.xs = [lp.x for lp in self.dense_acq.lps.lps]
-        self.ys = [lp.y for lp in self.dense_acq.lps.lps]
-        self.azimuths = [lp.az_degrees for lp in self.dense_acq.lps.lps]
-        self.elevations = [lp.el_degrees for lp in self.dense_acq.lps.lps]
-        self.save_metrics_path = self.dense_acq.data['dir']+"\\metrics"    
-        if not os.path.exists(self.save_metrics_path):
-            os.mkdir(self.save_metrics_path)
-        if 'pixels_list_1d' in kwargs.keys():
-            self.pixels_list_1d = kwargs['pixels_list_1d']
-            self.pixels_indices_2d = [(int(self.pixels_list_1d[i]/self.w),self.pixels_list_1d[i]%self.w) for i in range(0,len(self.pixels_list_1d))]
-        if 'pixels_mask_for_analysis' in kwargs.keys():
-            print('mask code to be done')
-        if 'pixels_indices_2d' in kwargs.keys():
-            self.pixels_list_1d = [self.w*p[0]+int(self.w%p[1]) for p in kwargs['pixels_indices_2d']]
-        
+        if dense_acq is not None:
+            self.h,self.w = self.dense_acq.get_images()[0].img_mat.shape
+            self.pixels_intensities_matrix = self.dense_acq.get_acquisition_matrix()
+            
+            self.xs = [lp.x for lp in self.dense_acq.lps.lps]
+            self.ys = [lp.y for lp in self.dense_acq.lps.lps]
+            self.azimuths = [lp.az_degrees for lp in self.dense_acq.lps.lps]
+            self.elevations = [lp.el_degrees for lp in self.dense_acq.lps.lps]
+            self.save_metrics_path = self.dense_acq.data['dir']+"\\metrics"    
+            if not os.path.exists(self.save_metrics_path):
+                os.mkdir(self.save_metrics_path)
+            self.metrics_log = open(self.save_metrics_path+"\\metric_logs.txt","w")
+            if 'pixels_list_1d' in kwargs.keys():
+                self.pixels_list_1d = kwargs['pixels_list_1d']
+                self.pixels_indices_2d = [(int(self.pixels_list_1d[i]/self.w),self.pixels_list_1d[i]%self.w) for i in range(0,len(self.pixels_list_1d))]
+            if 'pixels_mask_for_analysis' in kwargs.keys():
+                print('mask code to be done')
+            if 'pixels_indices_2d' in kwargs.keys():
+                self.pixels_list_1d = [self.w*p[0]+int(self.w%p[1]) for p in kwargs['pixels_indices_2d']]
+            
         rejected_keys = set(kwargs.keys()) - set(allowed_args)
         if rejected_keys:
             raise ValueError("Invalid arguments in constructor:{}".format(rejected_keys))
 
-    def get_dense_acquisition_measurements(self):
+    def get_dense_ring_acquisition_measurements(self):
         start_t = time.time()
+        print("Loading pixels")
         if self.pixels_list_1d is not None:
             self.pixels_intensities_matrix = np.array([list(map(img.img_vect.__getitem__, self.pixels_list_1d)) for img in self.dense_acq.get_images()]).T
         print("Finished loading the pixel intensities to pixels intensiteis matrix in ", time.time()-start_t, "s")
-        self.find_best_light_positions_in_theta_space()
-        print(len(self.azimuths))
-        print(np.array(self.pixels_intensities_matrix).T.shape)
-        
+        self.find_best_light_positions_in_theta_space()        
 
     def plot_pixel_intensities_2d(self, lps, signal, title):
         go_fig = go.Figure(data=[go.Scatterpolar(r=[lp.el_degrees for lp in lps], theta=[lp.az_degrees for lp in lps], mode = 'markers', marker=dict(color=signal, showscale=True) )])
         go_fig.update_layout(title=title, autosize=True)
-        go_fig.write_html(self.save_metrics_path+"\\"+title+"_projected.html")
-
+        return go_fig
+        
+    def plot_distribution(self, histograms, group_labels ):
+        x = [list(hist[1]) for hist in histograms]
+        y = [list(hist[0]) for hist in histograms]
+        data = []
+        for i in range(0,len(x)):
+            x[i] = (np.array(x[i])[1:] + np.array(x[i])[:-1]) / 2
+            pd_data = {
+                "gradients": x[i],
+                "counts": y[i]
+            }
+            data.append(pd.DataFrame(data=pd_data).assign(group = group_labels[i]))
+        df = pd.concat(data)
+        return px.histogram(data_frame=df, x="gradients", y="counts", marginal="violin", color='group')        
+        
     def radial_polar_plot_2d(self, lps, signal, title):
         go_fig = go.Figure(data=[go.Scatterpolar(r=signal, theta=[lp.az_degrees for lp in lps], mode = 'lines'), go.Scatterpolar(r=signal, theta=[lp.az_degrees for lp in lps], mode = 'markers', marker=dict(color=signal, showscale=True))])
         go_fig.update_layout(title=title, autosize=True)
-        go_fig.write_html(self.save_metrics_path+"\\"+title+"_projected.html")
+        return go_fig
 
     def plot_pixel_intensities_3d(self, grid_data, signal, title):        
         x_grid, y_grid, z_grid = grid_data['x_grid'], grid_data['y_grid'], grid_data['z_grid']
         go_fig = go.Figure(data=[go.Surface(z=z_grid, y=y_grid,x=x_grid, opacity=0.5), go.Scatter3d(x=[lp.x for lp in self.dense_acq.lps.lps], y=[lp.y for lp in self.dense_acq.lps.lps], z=signal, mode="markers",marker=dict(color=signal, size=3))])
         go_fig.update_layout(title=title, autosize=True, xaxis_title ='lu', yaxis_title = 'lv')
-        go_fig.write_html(self.save_metrics_path+"\\"+title+".html")
+        return go_fig
 
     def interpolate_intensities(self, pixel_intensities):
         x = np.linspace(-1,1,max(Data_interpolation_sample_size,len(self.dense_acq.lps.lps)))
@@ -449,91 +479,163 @@ class dense_acquisition_measurements:
         z_grid = griddata((self.xs,self.ys), pixel_intensities, (x_grid, y_grid), method='cubic')
         return x_grid, y_grid, z_grid
 
+    def plot_overlaid_heat_map(self, data, overlay_img):
+        data = ((data - np.min(data)) / (np.max(data) - np.min(data)))*255
+        dst = cv2.addWeighted(data.astype(np.uint8), 0.9, overlay_img, 0.1, 0.0)
+        return px.imshow(dst)
+
+    def analyze_dense_acq(self):
+        self.theta_idx_step_size = int(len(self.xs)/Desired_validation_theta_acq_size)
+        self.metrics_log.write("Step size: "+ str(self.theta_idx_step_size)+"\n")
+        acq_gradients = np.gradient(self.pixels_intensities_matrix, axis=1)
+        acq_max_gradients = np.amax(np.abs(acq_gradients), axis=1)
+        self.plot_overlaid_heat_map(acq_max_gradients.reshape(self.h, self.w), self.dense_acq.get_images()[0].img_mat).write_html(self.save_metrics_path+"\\Specularity_map.html")
+        acq_gradients = acq_gradients.flatten()
+        self.max_gradient = max(abs(acq_gradients))
+        self.metrics_log.write("Max gradient: "+str(self.max_gradient)+"\n")
+        self.median_gradient = np.median(abs(acq_gradients))
+        self.metrics_log.write("Median gradient: "+str(self.median_gradient)+"\n")
+        max_gradient_idx = np.argwhere(abs(acq_gradients)==self.max_gradient)[0][0]
+        self.max_gradient_pxl_idx = int(max_gradient_idx/len(self.azimuths))
+        self.metrics_log.write("Max gradient pxl idx: "+str(self.max_gradient_pxl_idx)+"\n")
+        self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps,signal=acq_gradients[max_gradient_idx - (max_gradient_idx%len(self.azimuths)) : max_gradient_idx - (max_gradient_idx%len(self.azimuths))+len(self.azimuths)], title="Gradients of pixel showing max gradient").write_html(self.save_metrics_path+"\\Max_pxl_gradient.html")
+        self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal=self.pixels_intensities_matrix[self.max_gradient_pxl_idx,:], title="Max gradient pxl intensities").write_html(self.save_metrics_path+"\\Max_gradient_pxl_intensity.html")
+        self.dense_acq_gradients_histogram = np.histogram(acq_gradients)
+        del acq_gradients
+        self.plot_pixel_intensities_2d(lps=self.dense_acq.lps.lps, signal=np.mean(self.pixels_intensities_matrix,axis=0), title="Mean_pixl_intensities_2D").write_html(self.save_metrics_path+"\\Pxl_intensities_2D_projected.html")
+        self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal = np.mean(self.pixels_intensities_matrix,axis=0), title="Mean_Pixl_intensities_radial_2D").write_html(self.save_metrics_path+"\\Pxl_intensities_radial_2D.html")
+        x_grid, y_grid, z_grid = self.interpolate_intensities(np.mean(self.pixels_intensities_matrix,axis=0))
+        self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=np.mean(self.pixels_intensities_matrix,axis=0),  title="Mean_pixl_intensities_3D" ).write_html(self.save_metrics_path+"\\Pxl_intensities_3d.html")
+        self.metrics_log.close()
+        self.metrics_log = open(self.save_metrics_path+"\\metric_logs.txt","a")
+
+    def analyze_blps_acq(self):
+        self.plot_pixel_intensities_2d(lps=self.blps.lps,signal=self.elevations, title="Theoretical_nblps_nb_pts-"+ str(len(self.blps.lps))).write_html(self.save_metrics_path+"\\Theoretical_blps.html")
+        lp_filter = self.blps.unique_light_positions(self.blps.lps)
+        blps_filtered = light_positions(lps=lp_filter.get_unique_lps())
+        blps_filtered.img_file_names = [self.blps.img_file_names[i] for i in lp_filter.unique_element_indices]
+        critical_pxls_filtered = [self.trigger_pxls[i] for i in lp_filter.unique_element_indices]
+        nblp_criterions_filtered = [self.nblp_criterions[i] for i in lp_filter.unique_element_indices]
+        self.plot_pixel_intensities_2d(lps=blps_filtered.lps,signal=nblp_criterions_filtered, title="Theoretical_nblps_filtered_nb_pts-"+ str(len(blps_filtered.lps))).write_html(self.save_metrics_path+"\\Theoretical_blps_filtered.html")
+        blps_filtered.lp_file_path = self.dense_acq.data['dir']+"\\blps.lp"        
+        blps_filtered.write_lp_file()
+        blps_filtered_acq = acquisition(data={'dir': self.dense_acq.data['dir'],  'lp_file_name': "blps.lp"})
+        blps_filtered_pixels_intensities_matrix = blps_filtered_acq.get_acquisition_matrix()
+        if self.pixels_list_1d is not None:
+            blps_filtered_pixels_intensities_matrix = np.array([list(map(img.img_vect.__getitem__, self.pixels_list_1d)) for img in blps_filtered_acq.get_images()]).T 
+        blps_filtered_gradients_matrix = np.gradient(blps_filtered_pixels_intensities_matrix, axis=1)
+        self.radial_polar_plot_2d(lps=blps_filtered_acq.lps.lps,signal=blps_filtered_gradients_matrix[self.max_gradient_pxl_idx, :], title="Gradients of pixel showing max gradient in BLP acquisition").write_html(self.save_metrics_path+"\\Max_pxl_gradient_blp_acq.html")
+        self.radial_polar_plot_2d(lps=blps_filtered_acq.lps.lps, signal=blps_filtered_pixels_intensities_matrix[self.max_gradient_pxl_idx,:], title="Max gradient pxl intensities in BLP acquisition").write_html(self.save_metrics_path+"\\Max_gradient_pxl_intensity_blp_acq.html")
+        blps_filtered_gradients = blps_filtered_gradients_matrix.flatten()
+        self.metrics_log.write("Max blps gradient: "+str(max(blps_filtered_gradients))+"\n")
+        blps_filtered_gradients_histogram = np.histogram(blps_filtered_gradients)
+        self.plot_distribution(histograms=[self.dense_acq_gradients_histogram, blps_filtered_gradients_histogram], group_labels=["Dense acq gradients", "Best light position acq gradients"]).write_html(self.save_metrics_path+"\\Gradients_distribution_plot.html")
+        pxl_criticality_img = np.zeros(self.h *self.w)
+        pxl_criticality_array = self.pxls_criticality_matrix.sum(axis=1).flatten()
+        if self.pixels_list_1d is not None:
+            for i in range(0, len(self.pixels_list_1d)):
+                pxl_criticality_img[self.pixels_list_1d[i]] = pxl_criticality_array[i]            
+        else:
+            pxl_criticality_img = self.pxls_criticality_matrix.sum(axis=1).flatten()
+        pxl_criticality_img = pxl_criticality_img.reshape(self.h,self.w)
+        self.plot_overlaid_heat_map(data=pxl_criticality_img, overlay_img=blps_filtered_acq.get_images()[0].img_mat).write_html(self.save_metrics_path+"\\Pxl_criticalities_heat_map.html")
+        del blps_filtered_gradients
+        
+
     def find_best_light_positions_in_theta_space(self):
         start_t = time.time()
-        self.theta_idx_step_size = int(len(self.xs)/Desired_validation_theta_acq_size)
         self.sorted_theta_indices = np.argsort(self.azimuths)
+        print("Analyzing the acquisition")
+        self.analyze_dense_acq()
         self.acq_matrix = copy.deepcopy(self.pixels_intensities_matrix)[:,self.sorted_theta_indices]
-        print("Finished copying the intensities matrix to acq matrix: ", time.time()-start_t, "s")
-        start_t = time.time()
         del self.pixels_intensities_matrix
-        self.plot_pixel_intensities_2d(lps=self.dense_acq.lps.lps, signal=np.mean(self.acq_matrix,axis=0), title="Mean_pixl_intensities_2D")
-        self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal = np.mean(self.acq_matrix,axis=0), title="Mean_Pixl_intensities_radial_2D")            
-        x_grid, y_grid, z_grid = self.interpolate_intensities(np.mean(self.acq_matrix,axis=0))
-        self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=np.mean(self.acq_matrix,axis=0),  title="Mean_pixl_intensities_3D" )
-        print("Finished plotting the pixel intensities polots in ", time.time()-start_t, "s")
+        print("Finished analyzing in: ", time.time()-start_t) 
         nblps_indices = []
+        self.trigger_pxls = []
+        self.nblp_criterions = []
+        self.pxls_criticality_matrix = np.zeros(self.acq_matrix.shape,dtype=bool)
+        print(self.pxls_criticality_matrix.shape)
         nblps_indices.append(self.sorted_theta_indices[0])
         current_theta_idx = 1
-        nblps_indices.append(self.sorted_theta_indices[current_theta_idx])
         while current_theta_idx<len(self.azimuths)-1:
-            current_theta_idx = self.next_theta(current_theta_idx=current_theta_idx)               
+            current_theta_idx, pxl, criterion = self.next_theta(current_theta_idx=current_theta_idx)               
             nblps_indices.append(self.sorted_theta_indices[current_theta_idx])
-        nblps = light_positions(lps=[self.dense_acq.lps.lps[nblps_indices[i]] for i in range(0,len(nblps_indices))])
-        print(nblps)
-        self.plot_pixel_intensities_2d(lps=nblps.lps,signal=self.elevations, title="Theoretical_nblps_nb_pts-"+ str(len(nblps.lps)))
-        nblps_filtered = nblps.unique_light_positions(nblps.lps).get_unique_lps()
-        self.plot_pixel_intensities_2d(lps=nblps_filtered,signal=self.elevations, title="Theoretical_nblps_filtered_nb_pts-"+ str(len(nblps_filtered)))
+            self.trigger_pxls.append(pxl)
+            self.nblp_criterions.append(criterion)
+        del self.acq_matrix
+        self.blps = light_positions(lps=[self.dense_acq.lps.lps[i] for i in nblps_indices])
+        self.blps.img_file_names = [self.dense_acq.lps.img_file_names[i] for i in nblps_indices]
+        self.analyze_blps_acq()
+        self.metrics_log.close()
 
+    def abs_uint_difference(self,a,b):
+        return ne.evaluate('abs(a-b)')
     
     def next_theta(self, current_theta_idx):
+        self.theta_signal_validation_difference_threshold = min(45,int(2*self.max_gradient))
+        self.theta_signal_validation_gradient_threshold = 0.75*self.max_gradient
+        print('current theta idx: ', current_theta_idx)
         next_theta_idx = min(current_theta_idx+self.theta_idx_step_size,len(self.azimuths)-1)
+        trigger_pxl = None
+        criterion = SAMPLE_FREQ_CRITERION
         if current_theta_idx+1 < next_theta_idx:
             gradient_nblp = next_theta_idx
             differences_nblp = next_theta_idx    
-            gradients = np.gradient(self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1], axis=1).astype(int)
-            gradient_nblps = np.argwhere(abs(gradients.flatten())>Theta_signal_validation_gradient_threshold).flatten()%(next_theta_idx-current_theta_idx)
+            gradient_pxl = None
+            differences_pxl = None
+            gradients = abs(np.gradient(self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1], axis=1))
+            gradients_indices = np.argwhere(gradients.flatten()>self.theta_signal_validation_gradient_threshold).flatten()
+            gradient_nblps = gradients_indices%(next_theta_idx-current_theta_idx)
             if len(gradient_nblps)>0:
-                gradient_nblp = current_theta_idx+min(gradient_nblps)+1
+                min_loc = np.argwhere(gradient_nblps==min(gradient_nblps)).flatten()[0]
+                gradient_nblp = current_theta_idx+gradient_nblps[min_loc]+1
+                gradient_pxls = (gradients_indices/(next_theta_idx-current_theta_idx)).astype(int)
+                gradient_pxl = gradient_pxls[min_loc]
+                gradient_critical_pxls_indices = np.argwhere(gradients[:,gradient_nblps[min_loc]]>self.theta_signal_validation_gradient_threshold).flatten()                
             del gradients
-            differences = self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1] - self.acq_matrix[:,current_theta_idx,None].astype(int)
-            differences_nblps = np.argwhere(abs(differences.flatten())>Theta_signal_validation_difference_threshold).flatten()%(next_theta_idx-current_theta_idx)
+            differences = self.abs_uint_difference(self.acq_matrix[:,current_theta_idx+1:next_theta_idx+1],self.acq_matrix[:,current_theta_idx,None]).astype(int)
+            differences_indices = np.argwhere(differences.flatten()>self.theta_signal_validation_difference_threshold).flatten()
+            differences_nblps = differences_indices%(next_theta_idx-current_theta_idx)            
             if len(differences_nblps)>0:
-                differences_nblp = current_theta_idx+min(differences_nblps)+1
+                min_loc = np.argwhere(differences_nblps==min(differences_nblps)).flatten()[0]
+                differences_nblp = current_theta_idx+differences_nblps[min_loc]+1
+                differences_pxls = (differences_indices/(next_theta_idx-current_theta_idx)).astype(int)
+                differences_pxl = differences_pxls[min_loc]
+                difference_critical_pxls_indices = np.argwhere(differences[:,differences_nblps[min_loc]]>self.theta_signal_validation_difference_threshold).flatten()
             del differences
-            next_theta_idx = min(gradient_nblp, differences_nblp)   
-        return next_theta_idx
-            
-
-    def find_best_light_positions_in_theta_space_single_pxl(self):
-        self.theta_idx_step_size = int(len(self.xs)/Desired_validation_theta_acq_size)
-        self.sorted_theta_indices = np.argsort(self.azimuths)
-        for i in range(0, len(self.pixels_list_1d)):
-            i_pixel_intensities = [intensity[i] for intensity in self.pixels_intensities_matrix]
-            self.plot_pixel_intensities_2d(lps=self.dense_acq.lps.lps, signal=i_pixel_intensities, title="Pixl_intensities_2D_("+str(self.pixels_indices_2d[i])+")")
-            self.radial_polar_plot_2d(lps=self.dense_acq.lps.lps, signal = i_pixel_intensities, title="Pixl_intensities_radial_2D_("+str(self.pixels_indices_2d[i])+")")            
-            x_grid, y_grid, z_grid = self.interpolate_intensities(i_pixel_intensities)
-            self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=i_pixel_intensities,  title="Pixl_intensities_3D_("+str(self.pixels_indices_2d[i])+")" )
-            nblp_points = []
-            nblp_points.append(self.sorted_theta_indices[0])
-            current_theta_idx = 1
-            nblp_points.append(self.sorted_theta_indices[current_theta_idx])
-            while current_theta_idx<len(i_pixel_intensities)-1:
-                current_theta_idx = self.next_theta_single_pxl(current_theta_idx=current_theta_idx, signal=i_pixel_intensities)                
-                nblp_points.append(self.sorted_theta_indices[current_theta_idx])
-            nblp_signal = [i_pixel_intensities[nblp_points[i]] for i in range(0,len(nblp_points))]
-            nblps = [self.dense_acq.lps.lps[nblp_points[i]] for i in range(0,len(nblp_points))]
-            self.plot_pixel_intensities_2d(lps=nblps,signal=nblp_signal,title="theoretical_nblps_("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
-            self.radial_polar_plot_2d(lps=nblps, signal=nblp_signal,title="theoretical_nblps_radial_plot("+str(self.pixels_indices_2d[i])+")_nb_pts-"+ str(len(nblp_points)))
-
-    
+            if gradient_nblp<differences_nblp:                
+                trigger_pxl = gradient_pxl
+                next_theta_idx = gradient_nblp
+                criterion = GRAD_CRITERION
+                gradient_critical_pxls_indices = gradient_critical_pxls_indices*len(self.azimuths) + next_theta_idx
+                np.put(self.pxls_criticality_matrix, gradient_critical_pxls_indices, True)                
+            if differences_nblp<gradient_nblp:
+                trigger_pxl = differences_pxl
+                criterion = DIFF_CRITERION
+                next_theta_idx = differences_nblp
+                difference_critical_pxls_indices = difference_critical_pxls_indices*len(self.azimuths) + next_theta_idx
+                np.put(self.pxls_criticality_matrix, difference_critical_pxls_indices, True)                                
+        print('Next theta idx: ', next_theta_idx)
+        return next_theta_idx, trigger_pxl, criterion
+##########################################################################################
+class dense_acq_measurement:
 
     def find_best_light_positions_in_u_v_space(self):
         for i in range(0, len(self.pixels_list_1d)):
             i_pixel_intensities = [intensity[i] for intensity in self.pixels_intensities_matrix]
-            self.plot_pixel_intensities_2d(signal=i_pixel_intensities, title="Pixl_intensities_2D_("+str(self.pixels_indices_2d[i])+")")
+            self.plot_pixel_intensities_2d(signal=i_pixel_intensities, title="Pixl_intensities_2D_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Pixl_intensities_2D_projected.html")
             x_grid, y_grid, z_grid = self.interpolate_intensities(i_pixel_intensities)
-            self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=i_pixel_intensities,  title="Pixl_intensities_3D_("+str(self.pixels_indices_2d[i])+")" )
+            self.plot_pixel_intensities_3d(grid_data={'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': z_grid}, signal=i_pixel_intensities,  title="Pixl_intensities_3D_("+str(self.pixels_indices_2d[i])+")" ).write_html(self.save_metrics_path+"\\Pxl_intensities_3D.html")
             g, gx, gy, signal_gx, signal_gy, signal_g = self.compute_gradients_distribution_in_uv_space(z_grid=z_grid, pixel_intensities=i_pixel_intensities)
             gx_grid_data = {'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': gx}
             gy_grid_data = {'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': gy}
             g_grid_data = {'x_grid': x_grid, 'y_grid': y_grid, 'z_grid': g}
-            self.plot_pixel_intensities_2d(signal=signal_gx, title="gradient_x_2D_("+str(self.pixels_indices_2d[i])+")")
-            self.plot_pixel_intensities_2d(signal=signal_gy, title="gradient_y_2D_("+str(self.pixels_indices_2d[i])+")")
-            self.plot_pixel_intensities_2d(signal=signal_g, title="gradient_2D_("+str(self.pixels_indices_2d[i])+")")
-            self.plot_pixel_intensities_3d(grid_data=gx_grid_data, signal=signal_gx, title="gradient_3D_("+str(self.pixels_indices_2d[i])+")")
-            self.plot_pixel_intensities_3d(grid_data=gy_grid_data, signal=signal_gy, title="gradient_3Dx_("+str(self.pixels_indices_2d[i])+")")
-            self.plot_pixel_intensities_3d(grid_data=g_grid_data, signal=signal_g, title="gradient_3Dy_("+str(self.pixels_indices_2d[i])+")")
+            self.plot_pixel_intensities_2d(signal=signal_gx, title="gradient_x_2D_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Gradient_x_2D_projected.html")
+            self.plot_pixel_intensities_2d(signal=signal_gy, title="gradient_y_2D_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Gradient_y_2D_projected.html")
+            self.plot_pixel_intensities_2d(signal=signal_g, title="gradient_2D_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Gradient_2D_projected.html")
+            self.plot_pixel_intensities_3d(grid_data=gx_grid_data, signal=signal_gx, title="gradient_3D_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Gradient_3d.html")
+            self.plot_pixel_intensities_3d(grid_data=gy_grid_data, signal=signal_gy, title="gradient_3Dx_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Gradient_3d_x.html")
+            self.plot_pixel_intensities_3d(grid_data=g_grid_data, signal=signal_g, title="gradient_3Dy_("+str(self.pixels_indices_2d[i])+")").write_html(self.save_metrics_path+"\\Gradient_3d_y.html")
 
     def compute_gradients_distribution_in_uv_space(self, z_grid, pixel_intensities):   
         gx, gy = np.gradient(z_grid)
@@ -545,33 +647,101 @@ class dense_acquisition_measurements:
         signal_g = [g[marker_indices[i][1]][marker_indices[i][0]] for i in range(0,len(self.xs))]
         return g, gx, gy, signal_gx, signal_gy, signal_g
 
-        
+##########################################################################################
+class ring_nblp:
+    def __init__(self, **kwargs):
+        default_values = {'acq':None, 'initial_nb': 10} 
+        self.__dict__.update(default_values)
+        allowed_args = ('dense_acq', 'initial_nb', None)
+        if set(kwargs.keys()).issubset(allowed_args):
+            self.__dict__.update(kwargs) 
+
+        self.h,self.w = self.dense_acq.get_images()[0].img_mat.shape
 
 
 
 # data = {'dir':os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\rust_coarse\theta_gradient\dense'), 'lp_file_name': "iteration_0.lp"}
 # data = {'dir':os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_20221005_144547_dense_ring'), 'lp_file_name': "acquisition.lp"}
-# data = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\zinc_plate\LDR_20221010_193412_ring_dense_phi_10_nb_750'),  'lp_file_name': "acquisition.lp"}
+# data = {'dir': os.path.abspath(r'E:\acquisitions\nblp_v2\coin\LDR_20221005_144547_dense_ring\roi_acq'),  'lp_file_name': "acquisition.lp"}
 # k = acquisition(data=data)
 
-# roi = {'w_from_center':1142, 'h_from_center':1000}
-# new_acq = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\coin\LDR_20221005_144547_dense_ring\roi_acq'),  'lp_file_name': "acquisition.lp"}
-# new_acq = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\rust_coarse\theta_gradient\dense'),  'lp_file_name': "iteration_0.lp"}
-new_acq = {'dir': os.path.abspath(r'D:\imvia_phd\data\nblp_v2\nblp_2_acquisitions\zinc_plate\LDR_20221010_193412_ring_dense_phi_10_nb_750\resized_acq'),  'lp_file_name': "acquisition.lp"}
+# roi = {'w_from_center':500, 'h_from_center':500}
+# new_acq = {'dir': os.path.abspath(r'E:\acquisitions\nblp_v2\brushed_metal\ring_dense_acquisition\phi_45_500'),  'lp_file_name': "iteration_0.lp"}
+# new_acq = {'dir': os.path.abspath(r'E:\acquisitions\nblp_v2\rust_coarse\theta_gradient\dense'),  'lp_file_name': "blps.lp"}
+new_acq = {'dir': os.path.abspath(r'C:\Users\Ramamoorthy_Luxman\Desktop\roi_acq'),  'lp_file_name': "acquisition.lp"}
 # k.copy_acquisition(new_data=new_acq,resize = {'ratio':0.5})
-# # k.copy_acquisition(new_acq, roi=roi)
-# # k = new_acq
+# k.copy_acquisition(new_acq, roi=roi)
+# k = new_acq
 
 k = acquisition(data=new_acq)
 
 # # pixels = [(10,15),(100,200), (400,500)]
-# pixels = [(500,500)]
-# pixels = [(100,100)]
+# pixels = [(800,500)]
+# pixels = [(100,100),(100,200)]
 
 # pixels = [100,1,700, 1800]
 # l = dense_acquisition_measurements(dense_acq = k,pixels_indices_2d= pixels)
-l = dense_acquisition_measurements(dense_acq = k)
+# l = dense_acquisition_measurements(dense_acq=k, pixels_list_1d = [118236])
+l = dense_ring_acquisition_measurements(dense_acq = k)
 s = l.get_dense_acquisition_measurements()
+# lps = k.lps.lps[::int(np.ceil( len(k.lps.lps) / Desired_validation_theta_acq_size ))]
+# lps = k.lps.lps
+# lps.append(lps[0])
+# signal = l.pixels_intensities_matrix[l.pixels_list_1d,:][0][::int(np.ceil( len(k.lps.lps) / Desired_validation_theta_acq_size ))]
+# signal = l.pixels_intensities_matrix[l.pixels_list_1d,:][0]
+# signal = np.append(signal, signal[0])
+# print(signal)
+# print(len(signal))
+# print(len(lps))
+# l.radial_polar_plot_2d(lps=lps, signal = signal, title="(500,500)_Pixl_intensities_radial_2D")   
+# thetas = [lp.az_degrees for lp in lps]
+# timestep = 360/len(thetas)
+# spectrum = np.fft.fft(signal)
+# n = signal.size
+# freq = np.fft.fftfreq(n, d=timestep)
+# print(len(freq))
+# # freq = np.fft.fftfreq(len(spectrum))
+# spectrum_cut = spectrum.copy()
+# spectrum_cut[(freq>0)] = 0
+# # spectrum_cut[(freq>-0.002)] = 0
+# # spectrum_cut[(freq<-0.005)] = 0
+# cut_signal = np.fft.ifft(spectrum_cut)
+
+
+# plt.subplot(221)
+# plt.plot(thetas,signal)
+# plt.subplot(222)
+# plt.plot(freq,spectrum)
+# plt.subplot(223)
+# plt.plot(freq,spectrum_cut)
+# plt.subplot(224)
+# plt.plot(thetas,cut_signal)
+
+# # SAMPLE_RATE = 
+# # yf = fft(signal)
+# # xf = fftfreq(N, 1 / SAMPLE_RATE)
+# l = dense_acquisition_measurements(dense_acq = k)
+# s = l.get_dense_acquisition_measurements()
+
+# Fs = len(signal)/360
+# T = 1/Fs
+# L = len(signal)
+# t = thetas
+# Y = fft(signal)
+# P2 = np.abs(Y/L);
+# P1 = P2[1:int(L/2)+1];
+# P1[2:len(P1)-1] = 2*P1[2:len(P1)-1]
+
+# f = Fs*linspace(0,int(L/2), num=len(P1))/L;
+# fig = plt.figure()
+# plt.subplot(121)
+# plt.plot(thetas,signal)
+# plt.subplot(122)
+# plt.plot(f,P1) 
+# # title("Single-Sided Amplitude Spectrum of X(t)")
+# # xlabel("f (Hz)")
+# # ylabel("|P1(f)|")
+# plt.show()
 
 
 
