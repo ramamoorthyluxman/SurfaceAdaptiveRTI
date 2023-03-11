@@ -134,11 +134,12 @@ def generate_n_evenly_spaced_hemispherical_points(samples = 45):
     # plot.show()
 
     return polar_points, cartesian_points
+    
 
 
 ############################ Generate n evenly spaced hemispherical points } ##################################
 
-def generate_homogenous_points_along_theta(samples = 30, dome_radius=1.0, phi=60.0):
+def generate_homogenous_points_along_theta(samples = 10, dome_radius=1.0, phi=45.0):
         light_positions_cartesian = []
         light_positions_polar = []
         dome_radius = dome_radius
@@ -363,8 +364,8 @@ class Nblp_2:
         path = context.scene.acquisition_panel.output_path
         self.context = context
         if not os.path.exists(path +"log.yaml"):
-            # lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=1000)
-            lps_polar, lps_cartesian = generate_homogenous_points_along_theta(samples=400)
+            # lps_polar, lps_cartesian = generate_n_evenly_spaced_hemispherical_points(samples=25)
+            lps_polar, lps_cartesian = generate_homogenous_points_along_theta(samples=10)
             step = self.iteration(lps_polar=lps_polar, lps_cartesian=lps_cartesian, iteration_nb=0, context=context)
             step.execute_acq()
             self.iterations.append(step)
@@ -680,7 +681,11 @@ class createLights(Operator):
             scene.collection.objects.link(light_sources)        
 
         for idx in range(0, len(mytool.light_positions)):
-            lightData = bpy.data.lights.new(name="RTI_light"+str(idx), type="SUN")
+            lightData = bpy.data.lights.new(name="RTI_light"+str(idx), type="SPOT")
+            lightData.spot_size = 0.1
+            
+
+
 
             current_light = bpy.data.objects.new(name="Light_{0}".format(idx), object_data=lightData)
             
